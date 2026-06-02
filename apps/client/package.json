@@ -1,0 +1,33 @@
+{
+  "name": "@remux/client",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "dev": "node ../../scripts/expo-start-no-shortcuts.mjs",
+    "web": "expo start --web",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~56.0.13",
+    "@expo/ui": "~56.0.15",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@remux/api-client": "0.1.0",
+    "@remux/protocol": "0.1.0",
+    "expo": "^56.0.8",
+    "expo-build-properties": "~56.0.16",
+    "ghostty-web": "^0.4.0",
+    "lucide-react-native": "^0.511.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-svg": "15.15.4",
+    "react-native-web": "^0.21.2",
+    "react-native-webview": "13.16.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.14"
+  }
+}

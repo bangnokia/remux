@@ -1,0 +1,27 @@
+{
+  "name": "remux",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:server": "npm --workspace @remux/server run dev",
+    "dev:client": "npm --workspace @remux/client run dev",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "playwright": "^1.60.0",
+    "typescript": "5.8.3",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

@@ -1,0 +1,17 @@
+node_modules
+dist
+.expo
+.cache
+coverage
+*.log
+.env
+.DS_Store
+
+# Generated Expo native projects/build outputs
+apps/client/ios/
+apps/client/android/
+
+# Local caches and package manager noise
+.npm
+.yarn
+.pnpm-store
