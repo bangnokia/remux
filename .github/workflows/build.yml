@@ -1,0 +1,115 @@
+name: Build Remux
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  server-cli:
+    name: Server CLI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck server
+        run: npm --workspace @remux/server run typecheck
+
+      - name: Build standalone server CLI
+        run: npm run build:server:standalone
+
+      - name: Smoke test CLI
+        run: node dist/remux-server.mjs --help
+
+      - name: Package server CLI
+        run: |
+          tar -czf dist/remux-server-node24.tar.gz -C dist remux-server.mjs
+          sha256sum dist/remux-server-node24.tar.gz > dist/remux-server-node24.tar.gz.sha256
+
+      - name: Upload server CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: remux-server-cli
+          path: |
+            dist/remux-server-node24.tar.gz
+            dist/remux-server-node24.tar.gz.sha256
+          if-no-files-found: error
+
+  android-apk:
+    name: Android APK
+    runs-on: ubuntu-latest
+    env:
+      CI: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck client
+        run: npm --workspace @remux/client run typecheck
+
+      - name: Prebuild Android project
+        run: npm --workspace @remux/client run prebuild:android
+
+      - name: Tune Gradle memory
+        run: |
+          sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8/' apps/client/android/gradle.properties
+          if grep -q '^org.gradle.parallel=' apps/client/android/gradle.properties; then
+            sed -i 's/^org.gradle.parallel=.*/org.gradle.parallel=true/' apps/client/android/gradle.properties
+          else
+            printf '\norg.gradle.parallel=true\n' >> apps/client/android/gradle.properties
+          fi
+
+      - name: Build release APK
+        working-directory: apps/client/android
+        env:
+          NODE_ENV: production
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist/android
+          APK_PATH="$(find apps/client/android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          if [ -z "$APK_PATH" ]; then
+            echo "No release APK was produced."
+            exit 1
+          fi
+          cp "$APK_PATH" dist/android/remux-android-release.apk
+          sha256sum dist/android/remux-android-release.apk > dist/android/remux-android-release.apk.sha256
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: remux-android-apk
+          path: |
+            dist/android/remux-android-release.apk
+            dist/android/remux-android-release.apk.sha256
+          if-no-files-found: error

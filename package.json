@@ -10,6 +10,8 @@
   "scripts": {
     "dev:server": "npm --workspace @remux/server run dev",
     "dev:client": "npm --workspace @remux/client run dev",
+    "build:android:apk": "npm --workspace @remux/client run build:android:apk",
+    "build:server:standalone": "node scripts/build-server-cli.mjs",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"
@@ -17,6 +19,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
+    "esbuild": "0.27.7",
     "playwright": "^1.60.0",
     "typescript": "5.8.3",
     "vitest": "^3.2.0"
