@@ -17,6 +17,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   useImperativeHandle(ref, () => ({
     send(data: string) {
       sendSocket(socketRef.current, { type: "input", data });
+      terminalRef.current?.focus();
     },
     fit() {
       fitTerminal();

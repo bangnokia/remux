@@ -2,16 +2,20 @@ import { RemuxClient } from "@remux/api-client";
 import { Host as ExpoHost, Icon as ExpoIcon } from "@expo/ui";
 import type { TmuxPane, TmuxSession, TmuxTree, TmuxWindow } from "@remux/protocol";
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Edit3,
-  LogOut,
+  Menu,
   Plus,
-  RefreshCw,
   Server,
   SquareTerminal,
+  Trash2,
   X
 } from "lucide-react-native";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Platform,
@@ -27,7 +31,8 @@ import {
   View
 } from "./src/rn";
 import TerminalPane from "./src/TerminalPane";
-import { clearConnection, loadConnection, saveConnection, type SavedConnection } from "./src/storage";
+import { loadConnection, saveConnection, type SavedConnection } from "./src/storage";
+import type { TerminalPaneHandle } from "./src/terminal-types";
 
 type IconType = React.ComponentType<{ color?: string; size?: number; strokeWidth?: number }>;
 type ExpoIconName = React.ComponentProps<typeof ExpoIcon>["name"];
@@ -36,19 +41,22 @@ type RenameTarget = { kind: "session" | "window"; id: string; name: string } | n
 const ENV_SERVER_URL =
   typeof process !== "undefined" ? process.env.EXPO_PUBLIC_REMUX_SERVER_URL?.trim() : undefined;
 const DEFAULT_SERVER_URL = ENV_SERVER_URL || (Platform.OS === "android" ? "http://10.0.2.2:8787" : "http://127.0.0.1:8787");
+const COMMAND_BAR_HEIGHT = 52;
+const COMMAND_TOGGLE_HEIGHT = 44;
 
 export default function App(): React.ReactElement {
   const { width } = useWindowDimensions();
   const wide = width >= 760;
+  const terminalRef = useRef<TerminalPaneHandle>(null);
   const [connection, setConnection] = useState<SavedConnection | null>(null);
   const [setupBaseUrl, setSetupBaseUrl] = useState(DEFAULT_SERVER_URL);
   const [setupToken, setSetupToken] = useState("");
   const [tree, setTree] = useState<TmuxTree | null>(null);
   const [selectedPaneId, setSelectedPaneId] = useState<string | null>(null);
-  const [terminalStatus, setTerminalStatus] = useState("idle");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  const [commandBarVisible, setCommandBarVisible] = useState(true);
   const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
 
   const client = useMemo(() => (connection ? new RemuxClient(connection) : null), [connection]);
@@ -153,13 +161,6 @@ export default function App(): React.ReactElement {
     }
   }
 
-  async function disconnect(): Promise<void> {
-    await clearConnection();
-    setConnection(null);
-    setTree(null);
-    setSelectedPaneId(null);
-  }
-
   async function runTreeAction(action: () => Promise<TmuxTree>, selectPane?: string | null): Promise<void> {
     if (!client) {
       return;
@@ -189,6 +190,14 @@ export default function App(): React.ReactElement {
       return;
     }
     await runTreeAction(() => client!.createWindow({ sessionId: selected.session.id }));
+  }
+
+  async function deleteSession(sessionId: string): Promise<void> {
+    await runTreeAction(() => client!.killSession(sessionId));
+  }
+
+  async function deleteWindow(windowId: string): Promise<void> {
+    await runTreeAction(() => client!.killWindow(windowId));
   }
 
   async function submitRename(nextName: string): Promise<void> {
@@ -221,6 +230,10 @@ export default function App(): React.ReactElement {
     if (paneId) {
       selectPane(paneId);
     }
+  }
+
+  function sendTerminalKey(data: string): void {
+    terminalRef.current?.send(data);
   }
 
   if (!connection) {
@@ -270,22 +283,6 @@ export default function App(): React.ReactElement {
     <SafeAreaView style={styles.root}>
       <StatusBar barStyle="light-content" />
       <View style={styles.app}>
-        <View style={[styles.topBar, wide ? styles.topBarWide : null]}>
-          <View style={styles.titleCluster}>
-            <Text style={styles.brandSmall}>Remux</Text>
-            <Text numberOfLines={1} style={styles.targetText}>
-              {selected
-                ? `${selected.session.name} / ${selected.window.index}: ${selected.window.name} / ${terminalStatus}`
-                : `No window selected / ${terminalStatus}`}
-            </Text>
-          </View>
-          <View style={styles.topActions}>
-            {!wide ? <IconButton icon={Server} iosSymbol="server.rack" label="Sessions" onPress={() => setShowSwitcher((value) => !value)} /> : null}
-            <IconButton icon={RefreshCw} iosSymbol="arrow.clockwise" label="Refresh" onPress={() => void refreshTree()} />
-            <IconButton icon={LogOut} iosSymbol="rectangle.portrait.and.arrow.right" label="Disconnect" onPress={() => void disconnect()} />
-          </View>
-        </View>
-
         <View style={[styles.workspace, wide ? styles.workspaceWide : null]}>
           {wide ? (
             <View style={styles.sidebar}>
@@ -294,6 +291,8 @@ export default function App(): React.ReactElement {
                 tree={tree}
                 onCreateSession={() => void createSession()}
                 onCreateWindow={() => void createWindow()}
+                onDeleteSession={(sessionId) => void deleteSession(sessionId)}
+                onDeleteWindow={(windowId) => void deleteWindow(windowId)}
                 onRename={setRenameTarget}
                 onSelectWindow={selectWindow}
               />
@@ -301,17 +300,18 @@ export default function App(): React.ReactElement {
           ) : null}
 
           <View style={styles.primary}>
-            <View style={styles.terminalFrame}>
+            <View style={[styles.terminalFrame, commandBarVisible ? styles.terminalFrameRaised : null]}>
               {loading ? (
                 <View style={styles.emptyState}>
                   <ActivityIndicator color={palette.accent} />
                 </View>
               ) : terminalUrl && selectedPaneId ? (
                 <TerminalPane
+                  ref={terminalRef}
                   key={selectedPaneId}
                   paneId={selectedPaneId}
                   wsUrl={terminalUrl}
-                  onStatus={setTerminalStatus}
+                  onStatus={() => undefined}
                   onTreeChanged={handleTreeChanged}
                 />
               ) : (
@@ -329,8 +329,23 @@ export default function App(): React.ReactElement {
           </View>
         </View>
 
-        {!wide && showSwitcher ? (
-          <View style={styles.mobileSwitcher}>
+        <CommandBar
+          visible={commandBarVisible}
+          onArrowDown={() => sendTerminalKey("\u001b[B")}
+          onArrowUp={() => sendTerminalKey("\u001b[A")}
+          onControl={() => sendTerminalKey("\u0003")}
+          onMenu={() => setShowSwitcher((value) => !value)}
+          onToggle={() => setCommandBarVisible((value) => !value)}
+        />
+
+        {showSwitcher ? (
+          <View
+            style={[
+              styles.mobileSwitcher,
+              wide ? styles.mobileSwitcherWide : null,
+              { bottom: commandBarVisible ? COMMAND_BAR_HEIGHT : 0 }
+            ]}
+          >
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>Sessions</Text>
               <IconButton icon={X} iosSymbol="xmark" label="Close" onPress={() => setShowSwitcher(false)} />
@@ -340,6 +355,8 @@ export default function App(): React.ReactElement {
               tree={tree}
               onCreateSession={() => void createSession()}
               onCreateWindow={() => void createWindow()}
+              onDeleteSession={(sessionId) => void deleteSession(sessionId)}
+              onDeleteWindow={(windowId) => void deleteWindow(windowId)}
               onRename={setRenameTarget}
               onSelectWindow={selectWindow}
             />
@@ -363,6 +380,8 @@ function SessionTree({
   selectedWindowId,
   onCreateSession,
   onCreateWindow,
+  onDeleteSession,
+  onDeleteWindow,
   onSelectWindow,
   onRename
 }: {
@@ -370,6 +389,8 @@ function SessionTree({
   selectedWindowId: string | null;
   onCreateSession(): void;
   onCreateWindow(): void;
+  onDeleteSession(sessionId: string): void;
+  onDeleteWindow(windowId: string): void;
   onSelectWindow(window: TmuxWindow): void;
   onRename(target: RenameTarget): void;
 }): React.ReactElement {
@@ -387,19 +408,29 @@ function SessionTree({
         <View key={session.id} style={styles.sessionBlock}>
           <View style={styles.sessionHeader}>
             <Text numberOfLines={1} style={styles.sessionName}>{session.name}</Text>
-            <TouchableOpacity
-              accessibilityLabel={`Rename session ${session.name}`}
-              onPress={() => onRename({ kind: "session", id: session.id, name: session.name })}
-              style={styles.inlineIcon}
-            >
-              <AdaptiveIcon fallback={Edit3} iosSymbol="pencil" color={palette.muted} size={14} />
-            </TouchableOpacity>
+            <View style={styles.sessionHeaderActions}>
+              <TouchableOpacity
+                accessibilityLabel={`Rename session ${session.name}`}
+                onPress={() => onRename({ kind: "session", id: session.id, name: session.name })}
+                style={styles.inlineIcon}
+              >
+                <AdaptiveIcon fallback={Edit3} iosSymbol="pencil" color={palette.muted} size={14} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                accessibilityLabel={`Destroy session ${session.name}`}
+                onPress={() => onDeleteSession(session.id)}
+                style={styles.inlineIcon}
+              >
+                <AdaptiveIcon fallback={Trash2} iosSymbol="trash" color={palette.danger} size={14} />
+              </TouchableOpacity>
+            </View>
           </View>
           {session.windows.map((window) => (
             <WindowNode
               key={window.id}
               window={window}
               selected={window.id === selectedWindowId}
+              onDelete={() => onDeleteWindow(window.id)}
               onRename={() => onRename({ kind: "window", id: window.id, name: window.name })}
               onSelect={() => onSelectWindow(window)}
             />
@@ -413,30 +444,111 @@ function SessionTree({
 function WindowNode({
   window,
   selected,
+  onDelete,
   onRename,
   onSelect
 }: {
   window: TmuxWindow;
   selected: boolean;
+  onDelete(): void;
   onRename(): void;
   onSelect(): void;
 }): React.ReactElement {
   return (
-    <Pressable onPress={onSelect} style={[styles.windowRow, selected ? styles.windowRowSelected : null]}>
-      <View style={styles.windowNameGroup}>
+    <View style={[styles.windowRow, selected ? styles.windowRowSelected : null]}>
+      <Pressable onPress={onSelect} style={styles.windowSelectArea}>
         <AdaptiveIcon fallback={ChevronRight} iosSymbol="chevron.right" color={palette.muted} size={14} />
         <Text numberOfLines={1} style={[styles.windowName, selected ? styles.windowNameSelected : null]}>
           {window.index}: {window.name}
         </Text>
+      </Pressable>
+      <View style={styles.windowActions}>
+        <TouchableOpacity
+          accessibilityLabel={`Rename window ${window.name}`}
+          onPress={onRename}
+          style={styles.inlineIcon}
+        >
+          <AdaptiveIcon fallback={Edit3} iosSymbol="pencil" color={selected ? palette.accent : palette.muted} size={14} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          accessibilityLabel={`Destroy window ${window.name}`}
+          onPress={onDelete}
+          style={styles.inlineIcon}
+        >
+          <AdaptiveIcon fallback={Trash2} iosSymbol="trash" color={palette.danger} size={14} />
+        </TouchableOpacity>
       </View>
-      <TouchableOpacity
-        accessibilityLabel={`Rename window ${window.name}`}
-        onPress={onRename}
-        style={styles.inlineIcon}
-      >
-        <AdaptiveIcon fallback={Edit3} iosSymbol="pencil" color={selected ? palette.accent : palette.muted} size={14} />
-      </TouchableOpacity>
-    </Pressable>
+    </View>
+  );
+}
+
+function CommandBar({
+  visible,
+  onArrowDown,
+  onArrowUp,
+  onControl,
+  onMenu,
+  onToggle
+}: {
+  visible: boolean;
+  onArrowDown(): void;
+  onArrowUp(): void;
+  onControl(): void;
+  onMenu(): void;
+  onToggle(): void;
+}): React.ReactElement {
+  if (!visible) {
+    return (
+      <View style={styles.commandBarCollapsed}>
+        <CommandIconButton icon={ChevronUp} iosSymbol="chevron.up" label="Show command bar" onPress={onToggle} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.commandBar}>
+      <CommandIconButton icon={Menu} iosSymbol="line.3.horizontal" label="Sessions" onPress={onMenu} />
+      <View style={styles.commandDivider} />
+      <CommandTextButton label="Send Ctrl-C" text="Ctrl" onPress={onControl} />
+      <CommandIconButton icon={ArrowUp} iosSymbol="arrow.up" label="Arrow up" onPress={onArrowUp} />
+      <CommandIconButton icon={ArrowDown} iosSymbol="arrow.down" label="Arrow down" onPress={onArrowDown} />
+      <View style={styles.commandSpacer} />
+      <CommandIconButton icon={ChevronDown} iosSymbol="chevron.down" label="Hide command bar" onPress={onToggle} />
+    </View>
+  );
+}
+
+function CommandIconButton({
+  icon: Icon,
+  iosSymbol,
+  label,
+  onPress
+}: {
+  icon: IconType;
+  iosSymbol: ExpoIconName;
+  label: string;
+  onPress(): void;
+}): React.ReactElement {
+  return (
+    <TouchableOpacity accessibilityLabel={label} onPress={onPress} style={styles.commandButton}>
+      <AdaptiveIcon fallback={Icon} iosSymbol={iosSymbol} color={palette.text} size={18} />
+    </TouchableOpacity>
+  );
+}
+
+function CommandTextButton({
+  label,
+  text,
+  onPress
+}: {
+  label: string;
+  text: string;
+  onPress(): void;
+}): React.ReactElement {
+  return (
+    <TouchableOpacity accessibilityLabel={label} onPress={onPress} style={styles.commandButton}>
+      <Text style={styles.commandButtonText}>{text}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -594,12 +706,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0
   },
-  brandSmall: {
-    color: palette.text,
-    fontSize: 18,
-    fontWeight: "800",
-    letterSpacing: 0
-  },
   muted: {
     color: palette.muted,
     fontSize: 14,
@@ -675,35 +781,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6
   },
-  topBar: {
-    alignItems: "center",
-    backgroundColor: "rgba(16, 20, 18, 0.72)",
-    flexDirection: "row",
-    gap: 12,
-    left: 0,
-    minHeight: 48,
-    paddingHorizontal: 10,
-    position: "absolute",
-    right: 0,
-    top: 0,
-    zIndex: 20
-  },
-  topBarWide: {
-    left: 300
-  },
-  titleCluster: {
-    flex: 1,
-    minWidth: 0
-  },
-  targetText: {
-    color: palette.muted,
-    fontSize: 12,
-    marginTop: 2
-  },
-  topActions: {
-    flexDirection: "row",
-    gap: 8
-  },
   workspace: {
     flex: 1,
     minHeight: 0
@@ -714,12 +791,16 @@ const styles = StyleSheet.create({
   primary: {
     flex: 1,
     minHeight: 0,
+    overflow: "hidden",
     position: "relative"
   },
   terminalFrame: {
     backgroundColor: "#0d1110",
     flex: 1,
     minHeight: 0
+  },
+  terminalFrameRaised: {
+    transform: [{ translateY: -COMMAND_BAR_HEIGHT }]
   },
   emptyState: {
     alignItems: "center",
@@ -780,6 +861,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 8
   },
+  sessionHeaderActions: {
+    flexDirection: "row",
+    gap: 2
+  },
   sessionName: {
     color: palette.text,
     flex: 1,
@@ -806,12 +891,17 @@ const styles = StyleSheet.create({
     backgroundColor: palette.panelStrong,
     borderLeftColor: palette.accent
   },
-  windowNameGroup: {
+  windowSelectArea: {
     alignItems: "center",
     flex: 1,
     flexDirection: "row",
     gap: 4,
+    minHeight: 38,
     minWidth: 0
+  },
+  windowActions: {
+    flexDirection: "row",
+    gap: 2
   },
   windowName: {
     color: palette.muted,
@@ -827,11 +917,13 @@ const styles = StyleSheet.create({
     backgroundColor: palette.panel,
     borderTopColor: palette.line,
     borderTopWidth: 1,
-    bottom: 0,
     height: "58%",
     left: 0,
     position: "absolute",
     right: 0
+  },
+  mobileSwitcherWide: {
+    left: 300
   },
   sheetHeader: {
     alignItems: "center",
@@ -871,5 +963,52 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
     justifyContent: "flex-end"
+  },
+  commandBar: {
+    alignItems: "center",
+    backgroundColor: palette.panel,
+    borderTopColor: palette.line,
+    borderTopWidth: 1,
+    bottom: 0,
+    flexDirection: "row",
+    gap: 8,
+    height: COMMAND_BAR_HEIGHT,
+    left: 0,
+    paddingHorizontal: 8,
+    position: "absolute",
+    right: 0,
+    zIndex: 35
+  },
+  commandBarCollapsed: {
+    alignItems: "center",
+    bottom: 6,
+    height: COMMAND_TOGGLE_HEIGHT,
+    justifyContent: "center",
+    position: "absolute",
+    right: 8,
+    width: COMMAND_TOGGLE_HEIGHT,
+    zIndex: 35
+  },
+  commandButton: {
+    alignItems: "center",
+    backgroundColor: palette.panelStrong,
+    height: 36,
+    justifyContent: "center",
+    minWidth: 36,
+    paddingHorizontal: 10
+  },
+  commandButtonText: {
+    color: palette.text,
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0
+  },
+  commandDivider: {
+    backgroundColor: palette.line,
+    height: 28,
+    width: 1
+  },
+  commandSpacer: {
+    flex: 1
   }
 });
