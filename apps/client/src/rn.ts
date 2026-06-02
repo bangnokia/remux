@@ -2,6 +2,8 @@ import type React from "react";
 import * as RN from "react-native";
 
 export const ActivityIndicator = RN.ActivityIndicator as unknown as React.ComponentType<RN.ActivityIndicatorProps>;
+export const KeyboardAvoidingView = RN.KeyboardAvoidingView as unknown as React.ComponentType<RN.KeyboardAvoidingViewProps>;
+export const Modal = RN.Modal as unknown as React.ComponentType<RN.ModalProps>;
 export const Pressable = RN.Pressable as unknown as React.ComponentType<RN.PressableProps>;
 export const SafeAreaView = RN.SafeAreaView as unknown as React.ComponentType<RN.ViewProps>;
 export const ScrollView = RN.ScrollView as unknown as React.ComponentType<RN.ScrollViewProps>;

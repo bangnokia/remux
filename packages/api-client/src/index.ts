@@ -100,9 +100,11 @@ export class RemuxClient {
     path: string,
     options: { method?: string; body?: unknown } = {}
   ): Promise<T> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json"
-    };
+    const hasBody = options.body !== undefined;
+    const headers: Record<string, string> = {};
+    if (hasBody) {
+      headers["Content-Type"] = "application/json";
+    }
     if (this.token) {
       headers.Authorization = `Bearer ${this.token}`;
     }
@@ -110,7 +112,7 @@ export class RemuxClient {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: options.method ?? "GET",
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body)
+      body: hasBody ? JSON.stringify(options.body) : undefined
     });
 
     if (!response.ok) {

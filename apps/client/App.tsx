@@ -1,5 +1,6 @@
 import { RemuxClient } from "@remux/api-client";
-import { Host as ExpoHost, Icon as ExpoIcon } from "@expo/ui";
+import { BottomSheet as ExpoBottomSheet, Host as ExpoHost, Icon as ExpoIcon, RNHostView as ExpoRNHostView } from "@expo/ui";
+import { presentationBackground } from "@expo/ui/swift-ui/modifiers";
 import type { TmuxPane, TmuxSession, TmuxTree, TmuxWindow } from "@remux/protocol";
 import {
   ArrowDown,
@@ -13,11 +14,13 @@ import {
   Server,
   SquareTerminal,
   Trash2,
-  X
 } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Animated, Easing } from "react-native";
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -43,11 +46,15 @@ const ENV_SERVER_URL =
 const DEFAULT_SERVER_URL = ENV_SERVER_URL || (Platform.OS === "android" ? "http://10.0.2.2:8787" : "http://127.0.0.1:8787");
 const COMMAND_BAR_HEIGHT = 52;
 const COMMAND_TOGGLE_HEIGHT = 44;
+type CommandProgress = InstanceType<typeof Animated.Value>;
 
 export default function App(): React.ReactElement {
   const { width } = useWindowDimensions();
   const wide = width >= 760;
+  const sheetWidth = Math.max(0, width - 32);
   const terminalRef = useRef<TerminalPaneHandle>(null);
+  const commandProgress = useRef(new Animated.Value(1)).current;
+  const pendingRenameTargetRef = useRef<RenameTarget>(null);
   const [connection, setConnection] = useState<SavedConnection | null>(null);
   const [setupBaseUrl, setSetupBaseUrl] = useState(DEFAULT_SERVER_URL);
   const [setupToken, setSetupToken] = useState("");
@@ -136,6 +143,15 @@ export default function App(): React.ReactElement {
     }
   }, [client, selectedPaneId]);
 
+  useEffect(() => {
+    Animated.timing(commandProgress, {
+      duration: commandBarVisible ? 190 : 160,
+      easing: commandBarVisible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      toValue: commandBarVisible ? 1 : 0,
+      useNativeDriver: true
+    }).start();
+  }, [commandBarVisible, commandProgress]);
+
   async function connect(): Promise<void> {
     const nextConnection = {
       baseUrl: setupBaseUrl.trim().replace(/\/+$/, ""),
@@ -192,6 +208,10 @@ export default function App(): React.ReactElement {
     await runTreeAction(() => client!.createWindow({ sessionId: selected.session.id }));
   }
 
+  async function createWindowForSession(sessionId: string): Promise<void> {
+    await runTreeAction(() => client!.createWindow({ sessionId }));
+  }
+
   async function deleteSession(sessionId: string): Promise<void> {
     await runTreeAction(() => client!.killSession(sessionId));
   }
@@ -234,6 +254,27 @@ export default function App(): React.ReactElement {
 
   function sendTerminalKey(data: string): void {
     terminalRef.current?.send(data);
+  }
+
+  function flushPendingRename(): void {
+    const target = pendingRenameTargetRef.current;
+    if (!target) {
+      return;
+    }
+
+    pendingRenameTargetRef.current = null;
+    setRenameTarget(target);
+  }
+
+  function handleSwitcherDismiss(): void {
+    setShowSwitcher(false);
+    flushPendingRename();
+  }
+
+  function openRenameFromSwitcher(target: NonNullable<RenameTarget>): void {
+    pendingRenameTargetRef.current = target;
+    setShowSwitcher(false);
+    setTimeout(flushPendingRename, 260);
   }
 
   if (!connection) {
@@ -300,7 +341,21 @@ export default function App(): React.ReactElement {
           ) : null}
 
           <View style={styles.primary}>
-            <View style={[styles.terminalFrame, commandBarVisible ? styles.terminalFrameRaised : null]}>
+            <Animated.View
+              style={[
+                styles.terminalFrame,
+                {
+                  transform: [
+                    {
+                      translateY: commandProgress.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, -COMMAND_BAR_HEIGHT]
+                      })
+                    }
+                  ]
+                }
+              ]}
+            >
               {loading ? (
                 <View style={styles.emptyState}>
                   <ActivityIndicator color={palette.accent} />
@@ -323,13 +378,14 @@ export default function App(): React.ReactElement {
                   </Pressable>
                 </View>
               )}
-            </View>
+            </Animated.View>
 
             {error ? <Text style={styles.errorTextInline}>{error}</Text> : null}
           </View>
         </View>
 
         <CommandBar
+          progress={commandProgress}
           visible={commandBarVisible}
           onArrowDown={() => sendTerminalKey("\u001b[B")}
           onArrowUp={() => sendTerminalKey("\u001b[A")}
@@ -338,30 +394,34 @@ export default function App(): React.ReactElement {
           onToggle={() => setCommandBarVisible((value) => !value)}
         />
 
-        {showSwitcher ? (
-          <View
-            style={[
-              styles.mobileSwitcher,
-              wide ? styles.mobileSwitcherWide : null,
-              { bottom: commandBarVisible ? COMMAND_BAR_HEIGHT : 0 }
-            ]}
-          >
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>Sessions</Text>
-              <IconButton icon={X} iosSymbol="xmark" label="Close" onPress={() => setShowSwitcher(false)} />
+        <ExpoBottomSheet
+          isPresented={showSwitcher}
+          onDismiss={handleSwitcherDismiss}
+          showDragIndicator
+          snapPoints={[{ fraction: 0.58 }, "full"]}
+          modifiers={Platform.OS === "ios" ? [presentationBackground(palette.bg)] : undefined}
+        >
+          <ExpoRNHostView>
+            <View style={[styles.sheetContent, { width: sheetWidth }]}>
+              <View style={styles.sheetHeader}>
+                <Text style={styles.sheetTitle}>Sessions</Text>
+                <View style={styles.sheetHeaderActions}>
+                  <IconButton icon={Plus} iosSymbol="plus" label="New session" onPress={() => void createSession()} />
+                </View>
+              </View>
+              <SessionSheet
+                selectedWindowId={selected?.window.id ?? null}
+                tree={tree}
+                onCreateSession={() => void createSession()}
+                onCreateWindow={(sessionId) => void createWindowForSession(sessionId)}
+                onDeleteSession={(sessionId) => void deleteSession(sessionId)}
+                onDeleteWindow={(windowId) => void deleteWindow(windowId)}
+                onRename={openRenameFromSwitcher}
+                onSelectWindow={selectWindow}
+              />
             </View>
-            <SessionTree
-              selectedWindowId={selected?.window.id ?? null}
-              tree={tree}
-              onCreateSession={() => void createSession()}
-              onCreateWindow={() => void createWindow()}
-              onDeleteSession={(sessionId) => void deleteSession(sessionId)}
-              onDeleteWindow={(windowId) => void deleteWindow(windowId)}
-              onRename={setRenameTarget}
-              onSelectWindow={selectWindow}
-            />
-          </View>
-        ) : null}
+          </ExpoRNHostView>
+        </ExpoBottomSheet>
 
         {renameTarget ? (
           <RenameSheet
@@ -372,6 +432,128 @@ export default function App(): React.ReactElement {
         ) : null}
       </View>
     </SafeAreaView>
+  );
+}
+
+function SessionSheet({
+  tree,
+  selectedWindowId,
+  onCreateSession,
+  onCreateWindow,
+  onDeleteSession,
+  onDeleteWindow,
+  onSelectWindow,
+  onRename
+}: {
+  tree: TmuxTree | null;
+  selectedWindowId: string | null;
+  onCreateSession(): void;
+  onCreateWindow(sessionId: string): void;
+  onDeleteSession(sessionId: string): void;
+  onDeleteWindow(windowId: string): void;
+  onSelectWindow(window: TmuxWindow): void;
+  onRename(target: RenameTarget): void;
+}): React.ReactElement {
+  if (!tree?.sessions.length) {
+    return (
+      <View style={styles.sheetEmpty}>
+        <Text style={styles.emptyTitle}>No sessions</Text>
+        <Text style={styles.muted}>Create a session to start a shell on this host.</Text>
+        <Pressable onPress={onCreateSession} style={styles.primaryButtonCompact}>
+          <Text style={styles.primaryButtonText}>Create session</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.sheetScroll} contentContainerStyle={styles.sheetList}>
+      {tree.sessions.map((session) => (
+        <View key={session.id} style={styles.sheetSession}>
+          <View style={styles.sheetSessionHeader}>
+            <View style={styles.sheetSessionTitleGroup}>
+              <Text numberOfLines={1} style={styles.sheetSessionName}>{session.name}</Text>
+            </View>
+            <View style={styles.sheetSessionActions}>
+              <IconButton
+                icon={Plus}
+                iosSymbol="plus"
+                label={`New window in ${session.name}`}
+                onPress={() => onCreateWindow(session.id)}
+                size={16}
+              />
+              <IconButton
+                icon={Edit3}
+                iosSymbol="pencil"
+                label={`Rename session ${session.name}`}
+                onPress={() => onRename({ kind: "session", id: session.id, name: session.name })}
+                size={16}
+              />
+              <IconButton
+                icon={Trash2}
+                iosSymbol="trash"
+                label={`Destroy session ${session.name}`}
+                onPress={() => onDeleteSession(session.id)}
+                size={16}
+              />
+            </View>
+          </View>
+          {session.windows.map((window) => (
+            <SheetWindowRow
+              key={window.id}
+              selected={window.id === selectedWindowId}
+              window={window}
+              onDelete={() => onDeleteWindow(window.id)}
+              onRename={() => onRename({ kind: "window", id: window.id, name: window.name })}
+              onSelect={() => onSelectWindow(window)}
+            />
+          ))}
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+function SheetWindowRow({
+  window,
+  selected,
+  onDelete,
+  onRename,
+  onSelect
+}: {
+  window: TmuxWindow;
+  selected: boolean;
+  onDelete(): void;
+  onRename(): void;
+  onSelect(): void;
+}): React.ReactElement {
+  return (
+    <View style={styles.sheetWindowRow}>
+      <Pressable onPress={onSelect} style={styles.sheetWindowSelect}>
+        <AdaptiveIcon fallback={ChevronRight} iosSymbol="chevron.right" color={selected ? palette.accent : palette.faint} size={16} />
+        <View style={styles.sheetWindowTextGroup}>
+          <Text numberOfLines={1} style={[styles.sheetWindowName, selected ? styles.sheetWindowNameSelected : null]}>
+            {window.index}: {window.name}
+          </Text>
+        </View>
+      </Pressable>
+      <View style={styles.sheetWindowActions}>
+        <IconButton
+          icon={Edit3}
+          iosSymbol="pencil"
+          label={`Rename window ${window.name}`}
+          onPress={onRename}
+          size={16}
+        />
+        <IconButton
+          icon={Trash2}
+          iosSymbol="trash"
+          label={`Destroy window ${window.name}`}
+          onPress={onDelete}
+          size={16}
+        />
+      </View>
+    </View>
   );
 }
 
@@ -483,6 +665,7 @@ function WindowNode({
 }
 
 function CommandBar({
+  progress,
   visible,
   onArrowDown,
   onArrowUp,
@@ -490,6 +673,7 @@ function CommandBar({
   onMenu,
   onToggle
 }: {
+  progress: CommandProgress;
   visible: boolean;
   onArrowDown(): void;
   onArrowUp(): void;
@@ -497,24 +681,56 @@ function CommandBar({
   onMenu(): void;
   onToggle(): void;
 }): React.ReactElement {
-  if (!visible) {
-    return (
-      <View style={styles.commandBarCollapsed}>
-        <CommandIconButton icon={ChevronUp} iosSymbol="chevron.up" label="Show command bar" onPress={onToggle} />
-      </View>
-    );
-  }
+  const barTranslateY = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [COMMAND_BAR_HEIGHT + 10, 0]
+  });
+  const toggleOpacity = progress.interpolate({
+    inputRange: [0, 0.72, 1],
+    outputRange: [1, 0, 0]
+  });
+  const toggleTranslateY = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, COMMAND_TOGGLE_HEIGHT + 8]
+  });
+  const toggleScale = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.9]
+  });
 
   return (
-    <View style={styles.commandBar}>
-      <CommandIconButton icon={Menu} iosSymbol="line.3.horizontal" label="Sessions" onPress={onMenu} />
-      <View style={styles.commandDivider} />
-      <CommandTextButton label="Send Ctrl-C" text="Ctrl" onPress={onControl} />
-      <CommandIconButton icon={ArrowUp} iosSymbol="arrow.up" label="Arrow up" onPress={onArrowUp} />
-      <CommandIconButton icon={ArrowDown} iosSymbol="arrow.down" label="Arrow down" onPress={onArrowDown} />
-      <View style={styles.commandSpacer} />
-      <CommandIconButton icon={ChevronDown} iosSymbol="chevron.down" label="Hide command bar" onPress={onToggle} />
-    </View>
+    <>
+      <Animated.View
+        pointerEvents={visible ? "auto" : "none"}
+        style={[
+          styles.commandBar,
+          {
+            opacity: progress,
+            transform: [{ translateY: barTranslateY }]
+          }
+        ]}
+      >
+        <CommandIconButton icon={Menu} iosSymbol="line.3.horizontal" label="Sessions" onPress={onMenu} />
+        <View style={styles.commandDivider} />
+        <CommandTextButton label="Send Ctrl-C" text="Ctrl" onPress={onControl} />
+        <CommandIconButton icon={ArrowUp} iosSymbol="arrow.up" label="Arrow up" onPress={onArrowUp} />
+        <CommandIconButton icon={ArrowDown} iosSymbol="arrow.down" label="Arrow down" onPress={onArrowDown} />
+        <View style={styles.commandSpacer} />
+        <CommandIconButton icon={ChevronDown} iosSymbol="chevron.down" label="Hide command bar" onPress={onToggle} />
+      </Animated.View>
+      <Animated.View
+        pointerEvents={visible ? "none" : "auto"}
+        style={[
+          styles.commandBarCollapsed,
+          {
+            opacity: toggleOpacity,
+            transform: [{ translateY: toggleTranslateY }, { scale: toggleScale }]
+          }
+        ]}
+      >
+        <CommandIconButton icon={ChevronUp} iosSymbol="chevron.up" label="Show command bar" onPress={onToggle} />
+      </Animated.View>
+    </>
   );
 }
 
@@ -585,28 +801,54 @@ function RenameSheet({
   onSubmit(name: string): void;
 }): React.ReactElement {
   const [name, setName] = useState(target.name);
+  const canSubmit = name.trim().length > 0;
+
   return (
-    <View style={styles.renameOverlay}>
-      <View style={styles.renamePanel}>
-        <Text style={styles.sheetTitle}>Rename {target.kind}</Text>
-        <TextInput
-          autoFocus
-          onChangeText={setName}
-          onSubmitEditing={() => onSubmit(name)}
-          selectTextOnFocus
-          style={styles.input}
-          value={name}
-        />
-        <View style={styles.renameActions}>
-          <Pressable onPress={onCancel} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Cancel</Text>
-          </Pressable>
-          <Pressable onPress={() => onSubmit(name)} style={styles.primaryButtonCompact}>
-            <Text style={styles.primaryButtonText}>Save</Text>
-          </Pressable>
+    <Modal animationType="slide" onRequestClose={onCancel} transparent visible>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.renameOverlay}
+      >
+        <Pressable accessibilityLabel="Cancel rename" onPress={onCancel} style={styles.renameBackdrop} />
+        <View style={styles.renamePanel}>
+          <View style={styles.renameHandle} />
+          <Text style={styles.renameTitle}>Rename {target.kind}</Text>
+          <TextInput
+            autoFocus
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setName}
+            onSubmitEditing={() => {
+              if (canSubmit) {
+                onSubmit(name);
+              }
+            }}
+            placeholder={`${target.kind} name`}
+            placeholderTextColor={palette.faint}
+            returnKeyType="done"
+            selectTextOnFocus
+            style={styles.renameInput}
+            value={name}
+          />
+          <View style={styles.renameActions}>
+            <Pressable onPress={onCancel} style={styles.renameActionButton}>
+              <Text style={styles.renameCancelText}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              disabled={!canSubmit}
+              onPress={() => {
+                if (canSubmit) {
+                  onSubmit(name);
+                }
+              }}
+              style={[styles.renameActionButton, styles.renameSaveButton, !canSubmit ? styles.renameSaveButtonDisabled : null]}
+            >
+              <Text style={[styles.renameSaveText, !canSubmit ? styles.renameSaveTextDisabled : null]}>Save</Text>
+            </Pressable>
+          </View>
         </View>
-      </View>
-    </View>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 
@@ -615,17 +857,19 @@ function IconButton({
   iosSymbol,
   label,
   danger,
+  size = 18,
   onPress
 }: {
   icon: IconType;
   iosSymbol: ExpoIconName;
   label: string;
   danger?: boolean;
+  size?: number;
   onPress(): void;
 }): React.ReactElement {
   return (
     <TouchableOpacity accessibilityLabel={label} onPress={onPress} style={styles.iconButton}>
-      <AdaptiveIcon fallback={Icon} iosSymbol={iosSymbol} color={danger ? palette.danger : palette.text} size={18} />
+      <AdaptiveIcon fallback={Icon} iosSymbol={iosSymbol} color={danger ? palette.danger : palette.text} size={size} />
     </TouchableOpacity>
   );
 }
@@ -799,9 +1043,6 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0
   },
-  terminalFrameRaised: {
-    transform: [{ translateY: -COMMAND_BAR_HEIGHT }]
-  },
   emptyState: {
     alignItems: "center",
     flex: 1,
@@ -816,16 +1057,15 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     alignItems: "center",
-    backgroundColor: palette.panelStrong,
-    height: 34,
+    height: 32,
     justifyContent: "center",
-    width: 34
+    width: 32
   },
   sidebar: {
-    backgroundColor: palette.panel,
-    borderRightColor: palette.line,
+    backgroundColor: "#111613",
+    borderRightColor: "rgba(216, 229, 222, 0.08)",
     borderRightWidth: 1,
-    width: 300
+    width: 288
   },
   tree: {
     flex: 1,
@@ -833,18 +1073,18 @@ const styles = StyleSheet.create({
     width: "100%"
   },
   treeContent: {
-    padding: 12,
+    padding: 10,
     paddingBottom: 32
   },
   treeHeader: {
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 18
+    marginBottom: 14
   },
   treeTitle: {
     color: palette.text,
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: "800"
   },
   treeActions: {
@@ -852,14 +1092,14 @@ const styles = StyleSheet.create({
     gap: 8
   },
   sessionBlock: {
-    marginBottom: 16
+    marginBottom: 14
   },
   sessionHeader: {
     alignItems: "center",
     flexDirection: "row",
     gap: 8,
     justifyContent: "space-between",
-    marginBottom: 8
+    marginBottom: 6
   },
   sessionHeaderActions: {
     flexDirection: "row",
@@ -868,7 +1108,7 @@ const styles = StyleSheet.create({
   sessionName: {
     color: palette.text,
     flex: 1,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "800"
   },
   inlineIcon: {
@@ -880,15 +1120,15 @@ const styles = StyleSheet.create({
   windowRow: {
     alignItems: "center",
     borderLeftColor: "transparent",
-    borderLeftWidth: 2,
+    borderLeftWidth: 1,
     flexDirection: "row",
     justifyContent: "space-between",
-    minHeight: 38,
+    minHeight: 36,
     paddingLeft: 8,
     paddingRight: 2
   },
   windowRowSelected: {
-    backgroundColor: palette.panelStrong,
+    backgroundColor: "rgba(216, 229, 222, 0.06)",
     borderLeftColor: palette.accent
   },
   windowSelectArea: {
@@ -896,7 +1136,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     gap: 4,
-    minHeight: 38,
+    minHeight: 36,
     minWidth: 0
   },
   windowActions: {
@@ -913,88 +1153,214 @@ const styles = StyleSheet.create({
     color: palette.text,
     fontWeight: "800"
   },
-  mobileSwitcher: {
-    backgroundColor: palette.panel,
-    borderTopColor: palette.line,
-    borderTopWidth: 1,
-    height: "58%",
-    left: 0,
-    position: "absolute",
-    right: 0
-  },
-  mobileSwitcherWide: {
-    left: 300
+  sheetContent: {
+    alignSelf: "stretch",
+    backgroundColor: palette.bg,
+    minHeight: 420,
+    paddingBottom: 18,
+    paddingHorizontal: 0
   },
   sheetHeader: {
     alignItems: "center",
-    borderBottomColor: palette.line,
-    borderBottomWidth: 1,
     flexDirection: "row",
     justifyContent: "space-between",
-    minHeight: 46,
-    paddingHorizontal: 12
+    minHeight: 38,
+    paddingBottom: 8
+  },
+  sheetHeaderActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6
   },
   sheetTitle: {
     color: palette.text,
-    fontSize: 15,
+    fontSize: 17,
     fontWeight: "800"
   },
-  renameOverlay: {
+  sheetScroll: {
+    alignSelf: "stretch",
+    maxHeight: 620,
+    minHeight: 320,
+    width: "100%"
+  },
+  sheetList: {
+    paddingBottom: 96,
+    paddingTop: 4
+  },
+  sheetEmpty: {
     alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.55)",
-    bottom: 0,
+    gap: 12,
     justifyContent: "center",
+    minHeight: 300,
+    padding: 24
+  },
+  sheetSession: {
+    marginBottom: 14
+  },
+  sheetSessionHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "space-between",
+    minHeight: 34
+  },
+  sheetSessionTitleGroup: {
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden"
+  },
+  sheetSessionName: {
+    color: palette.text,
+    fontSize: 16,
+    fontWeight: "800"
+  },
+  sheetSessionActions: {
+    alignItems: "center",
+    flexShrink: 0,
+    flexDirection: "row",
+    gap: 4
+  },
+  sheetWindowRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "space-between",
+    minHeight: 38,
+    paddingLeft: 12,
+    paddingVertical: 1
+  },
+  sheetWindowSelect: {
+    alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    gap: 8,
+    minHeight: 38,
+    minWidth: 0,
+    overflow: "hidden"
+  },
+  sheetWindowTextGroup: {
+    flex: 1,
+    minWidth: 0
+  },
+  sheetWindowName: {
+    color: palette.muted,
+    fontSize: 15,
+    fontWeight: "400"
+  },
+  sheetWindowNameSelected: {
+    color: palette.text
+  },
+  sheetWindowActions: {
+    alignItems: "center",
+    flexShrink: 0,
+    flexDirection: "row",
+    gap: 4
+  },
+  renameOverlay: {
+    flex: 1,
+    justifyContent: "flex-end"
+  },
+  renameBackdrop: {
+    backgroundColor: "rgba(0, 0, 0, 0.58)",
+    bottom: 0,
     left: 0,
-    padding: 22,
     position: "absolute",
     right: 0,
     top: 0
   },
   renamePanel: {
-    backgroundColor: palette.panel,
-    borderColor: palette.line,
-    borderWidth: 1,
-    gap: 12,
-    maxWidth: 420,
-    padding: 16,
+    backgroundColor: "#111613",
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    gap: 14,
+    paddingBottom: 28,
+    paddingHorizontal: 18,
+    paddingTop: 10,
     width: "100%"
+  },
+  renameHandle: {
+    alignSelf: "center",
+    backgroundColor: "rgba(216, 229, 222, 0.32)",
+    borderRadius: 3,
+    height: 5,
+    marginBottom: 8,
+    width: 48
+  },
+  renameTitle: {
+    color: palette.text,
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: 0
+  },
+  renameInput: {
+    backgroundColor: "rgba(216, 229, 222, 0.08)",
+    color: palette.text,
+    fontSize: 20,
+    minHeight: 54,
+    paddingHorizontal: 14,
+    paddingVertical: 12
   },
   renameActions: {
     flexDirection: "row",
-    gap: 10,
-    justifyContent: "flex-end"
+    gap: 12,
+    justifyContent: "space-between",
+    paddingTop: 4
+  },
+  renameActionButton: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 46
+  },
+  renameCancelText: {
+    color: palette.muted,
+    fontSize: 16,
+    fontWeight: "700"
+  },
+  renameSaveButton: {
+    backgroundColor: "rgba(124, 227, 139, 0.16)"
+  },
+  renameSaveButtonDisabled: {
+    backgroundColor: "rgba(216, 229, 222, 0.06)"
+  },
+  renameSaveText: {
+    color: palette.accent,
+    fontSize: 16,
+    fontWeight: "800"
+  },
+  renameSaveTextDisabled: {
+    color: palette.faint
   },
   commandBar: {
     alignItems: "center",
-    backgroundColor: palette.panel,
-    borderTopColor: palette.line,
+    backgroundColor: "rgba(16, 20, 18, 0.92)",
+    borderTopColor: "rgba(216, 229, 222, 0.08)",
     borderTopWidth: 1,
     bottom: 0,
     flexDirection: "row",
-    gap: 8,
+    gap: 7,
     height: COMMAND_BAR_HEIGHT,
     left: 0,
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
     position: "absolute",
     right: 0,
     zIndex: 35
   },
   commandBarCollapsed: {
     alignItems: "center",
-    bottom: 6,
-    height: COMMAND_TOGGLE_HEIGHT,
+    bottom: 8,
+    height: 40,
     justifyContent: "center",
     position: "absolute",
-    right: 8,
-    width: COMMAND_TOGGLE_HEIGHT,
+    right: 10,
+    width: 40,
     zIndex: 35
   },
   commandButton: {
     alignItems: "center",
-    backgroundColor: palette.panelStrong,
     height: 36,
     justifyContent: "center",
-    minWidth: 36,
+    minWidth: 38,
     paddingHorizontal: 10
   },
   commandButtonText: {
@@ -1004,8 +1370,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0
   },
   commandDivider: {
-    backgroundColor: palette.line,
-    height: 28,
+    backgroundColor: "rgba(216, 229, 222, 0.1)",
+    height: 24,
     width: 1
   },
   commandSpacer: {
