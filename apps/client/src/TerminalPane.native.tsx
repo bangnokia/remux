@@ -31,8 +31,12 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   }, []);
 
   const focusKeyboardProxy = useCallback(() => {
-    keyboardInputRef.current?.focus();
     resetKeyboardProxy();
+    keyboardInputRef.current?.focus();
+    requestAnimationFrame(() => {
+      resetKeyboardProxy();
+      keyboardInputRef.current?.focus();
+    });
   }, [resetKeyboardProxy]);
 
   const focusTerminal = useCallback(() => {
@@ -99,12 +103,12 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       focusWebTerminal();
     },
     focusKeyboard() {
-      focusTerminal();
+      focusKeyboardProxy();
     },
     fit() {
       webViewRef.current?.injectJavaScript("window.remuxFit && window.remuxFit(); true;");
     }
-  }), [focusTerminal, focusWebTerminal, sendToTerminal]);
+  }), [focusKeyboardProxy, focusWebTerminal, sendToTerminal]);
 
   function handleMessage(event: unknown): void {
     const data = readWebViewMessageData(event);
@@ -154,6 +158,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         onChangeText={handleKeyboardProxyChange}
         onFocus={resetKeyboardProxy}
         selection={KEYBOARD_PROXY_SELECTION}
+        showSoftInputOnFocus
         spellCheck={false}
         style={styles.keyboardProxy}
       />
