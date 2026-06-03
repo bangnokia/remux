@@ -2,19 +2,21 @@
   "expo": {
     "name": "Remux",
     "slug": "remux",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "orientation": "portrait",
     "scheme": "remux",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.bangnokia.remux"
+      "bundleIdentifier": "com.bangnokia.remux",
+      "buildNumber": "2"
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#101412"
       },
-      "package": "com.bangnokia.remux"
+      "package": "com.bangnokia.remux",
+      "versionCode": 2
     },
     "web": {
       "bundler": "metro",
