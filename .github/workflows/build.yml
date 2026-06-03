@@ -82,6 +82,49 @@ jobs:
           cp "$APK_PATH" dist/android/remux-android-release.apk
           sha256sum dist/android/remux-android-release.apk > dist/android/remux-android-release.apk.sha256
 
+      - name: Build iOS IPA with EAS
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "${EXPO_TOKEN:-}" ]; then
+            echo "EXPO_TOKEN is not configured; skipping iOS IPA build."
+            exit 0
+          fi
+
+          mkdir -p dist/ios
+          (
+            cd apps/client
+            npx eas-cli@latest build \
+              --platform ios \
+              --profile production \
+              --non-interactive \
+              --wait \
+              --json
+          ) > dist/eas-ios-build.json
+
+          node <<'NODE'
+          const fs = require("node:fs");
+
+          const raw = fs.readFileSync("dist/eas-ios-build.json", "utf8");
+          const parsed = JSON.parse(raw);
+          const build = Array.isArray(parsed) ? parsed[0] : parsed;
+          const artifactUrl =
+            build?.artifacts?.buildUrl ??
+            build?.artifacts?.applicationArchiveUrl ??
+            build?.applicationArchiveUrl;
+
+          if (!artifactUrl) {
+            console.error("Unable to find iOS artifact URL in EAS build output:");
+            console.error(JSON.stringify(parsed, null, 2));
+            process.exit(1);
+          }
+
+          fs.writeFileSync("dist/eas-ios-build-url.txt", `${artifactUrl}\n`);
+          NODE
+
+          curl -fL "$(cat dist/eas-ios-build-url.txt)" -o dist/ios/remux-ios-release.ipa
+          sha256sum dist/ios/remux-ios-release.ipa > dist/ios/remux-ios-release.ipa.sha256
+
       - name: Write release notes
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         run: |
@@ -94,6 +137,17 @@ jobs:
           - remux-server-node24.tar.gz
           - remux-server-node24.tar.gz.sha256
           EOF
+          if [ -f dist/ios/remux-ios-release.ipa ]; then
+            cat >> dist/release-notes.md <<EOF
+          - remux-ios-release.ipa
+          - remux-ios-release.ipa.sha256
+          EOF
+          else
+            cat >> dist/release-notes.md <<EOF
+
+          iOS IPA was skipped because EXPO_TOKEN was not configured for this repository.
+          EOF
+          fi
 
       - name: Publish release assets
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
@@ -113,9 +167,18 @@ jobs:
               --notes-file dist/release-notes.md
           fi
 
-          gh release upload "$RELEASE_TAG" \
-            dist/android/remux-android-release.apk \
-            dist/android/remux-android-release.apk.sha256 \
-            dist/remux-server-node24.tar.gz \
-            dist/remux-server-node24.tar.gz.sha256 \
-            --clobber
+          ASSETS=(
+            dist/android/remux-android-release.apk
+            dist/android/remux-android-release.apk.sha256
+            dist/remux-server-node24.tar.gz
+            dist/remux-server-node24.tar.gz.sha256
+          )
+
+          if [ -f dist/ios/remux-ios-release.ipa ]; then
+            ASSETS+=(
+              dist/ios/remux-ios-release.ipa
+              dist/ios/remux-ios-release.ipa.sha256
+            )
+          fi
+
+          gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --clobber

@@ -7,7 +7,7 @@ Remux is a self-hosted tmux controller for resuming terminal work from web, iOS,
 - A server or laptop that can run `tmux`.
 - Node.js 24 or newer on the server.
 - Network reachability from the phone to the server. Tailscale, WireGuard, or another private VPN is recommended.
-- The Android APK and server CLI assets from the latest GitHub Release.
+- The Android APK, iOS IPA, and server CLI assets from the latest GitHub Release.
 
 The server controls tmux on the same machine where it runs. If you already have tmux sessions there, Remux can reuse them.
 
@@ -32,6 +32,8 @@ Release assets:
 
 - `remux-android-release.apk`: Android APK.
 - `remux-android-release.apk.sha256`: Android APK SHA-256 checksum.
+- `remux-ios-release.ipa`: signed iOS IPA.
+- `remux-ios-release.ipa.sha256`: iOS IPA SHA-256 checksum.
 - `remux-server-node24.tar.gz`: standalone Node 24 server CLI.
 - `remux-server-node24.tar.gz.sha256`: server CLI SHA-256 checksum.
 
