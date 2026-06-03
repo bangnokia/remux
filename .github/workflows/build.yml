@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "*"
   pull_request:
   workflow_dispatch:
 
@@ -20,7 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CI: "1"
-      RELEASE_TAG: latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -86,10 +87,10 @@ jobs:
           sha256sum dist/android/remux-android-release.apk > dist/android/remux-android-release.apk.sha256
 
       - name: Write release notes
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         run: |
           cat > dist/release-notes.md <<EOF
-          Automated Remux build from commit ${GITHUB_SHA}.
+          Automated Remux build for ${GITHUB_REF_NAME} from commit ${GITHUB_SHA}.
 
           Assets:
           - remux-android-release.apk
@@ -99,25 +100,21 @@ jobs:
           EOF
 
       - name: Publish release assets
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
-          git push --force origin "refs/tags/$RELEASE_TAG"
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          RELEASE_TITLE="Remux ${RELEASE_TAG}"
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
-              --target "$GITHUB_SHA" \
-              --title "Latest Remux build" \
-              --notes-file dist/release-notes.md \
-              --latest
+              --title "$RELEASE_TITLE" \
+              --notes-file dist/release-notes.md
           else
             gh release create "$RELEASE_TAG" \
-              --target "$GITHUB_SHA" \
-              --title "Latest Remux build" \
-              --notes-file dist/release-notes.md \
-              --latest
+              --title "$RELEASE_TITLE" \
+              --notes-file dist/release-notes.md
           fi
 
           gh release upload "$RELEASE_TAG" \

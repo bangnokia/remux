@@ -13,12 +13,19 @@ The server controls tmux on the same machine where it runs. If you already have 
 
 ## Download Builds
 
-GitHub Actions publishes build outputs to the `latest` GitHub Release on every push to `main` and on manual runs.
+GitHub Actions publishes build outputs to GitHub Releases only when a tag is pushed. Normal `main` pushes and pull requests run the build without publishing release assets.
 
 Download from:
 
 ```text
 https://github.com/bangnokia/remux/releases/latest
+```
+
+To create a release build, push a new tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 Release assets:
