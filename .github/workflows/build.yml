@@ -7,51 +7,20 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: remux-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  server-cli:
-    name: Server CLI
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Typecheck server
-        run: npm --workspace @remux/server run typecheck
-
-      - name: Build standalone server CLI
-        run: npm run build:server:standalone
-
-      - name: Smoke test CLI
-        run: node dist/remux-server.mjs --help
-
-      - name: Package server CLI
-        run: |
-          tar -czf dist/remux-server-node24.tar.gz -C dist remux-server.mjs
-          sha256sum dist/remux-server-node24.tar.gz > dist/remux-server-node24.tar.gz.sha256
-
-      - name: Upload server CLI
-        uses: actions/upload-artifact@v7
-        with:
-          name: remux-server-cli
-          path: |
-            dist/remux-server-node24.tar.gz
-            dist/remux-server-node24.tar.gz.sha256
-          if-no-files-found: error
-
-  android-apk:
-    name: Android APK
+  build:
+    name: Build APK and Server CLI
     runs-on: ubuntu-latest
     env:
       CI: "1"
+      RELEASE_TAG: latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -71,8 +40,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck client
-        run: npm --workspace @remux/client run typecheck
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build standalone server CLI
+        run: npm run build:server:standalone
+
+      - name: Smoke test server CLI
+        run: node dist/remux-server.mjs --help
+
+      - name: Package server CLI
+        run: |
+          tar -czf dist/remux-server-node24.tar.gz -C dist remux-server.mjs
+          sha256sum dist/remux-server-node24.tar.gz > dist/remux-server-node24.tar.gz.sha256
 
       - name: Prebuild Android project
         run: npm --workspace @remux/client run prebuild:android
@@ -105,11 +85,44 @@ jobs:
           cp "$APK_PATH" dist/android/remux-android-release.apk
           sha256sum dist/android/remux-android-release.apk > dist/android/remux-android-release.apk.sha256
 
-      - name: Upload Android APK
-        uses: actions/upload-artifact@v7
-        with:
-          name: remux-android-apk
-          path: |
-            dist/android/remux-android-release.apk
-            dist/android/remux-android-release.apk.sha256
-          if-no-files-found: error
+      - name: Write release notes
+        if: github.event_name != 'pull_request'
+        run: |
+          cat > dist/release-notes.md <<EOF
+          Automated Remux build from commit ${GITHUB_SHA}.
+
+          Assets:
+          - remux-android-release.apk
+          - remux-android-release.apk.sha256
+          - remux-server-node24.tar.gz
+          - remux-server-node24.tar.gz.sha256
+          EOF
+
+      - name: Publish release assets
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$RELEASE_TAG"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Latest Remux build" \
+              --notes-file dist/release-notes.md \
+              --latest
+          else
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Latest Remux build" \
+              --notes-file dist/release-notes.md \
+              --latest
+          fi
+
+          gh release upload "$RELEASE_TAG" \
+            dist/android/remux-android-release.apk \
+            dist/android/remux-android-release.apk.sha256 \
+            dist/remux-server-node24.tar.gz \
+            dist/remux-server-node24.tar.gz.sha256 \
+            --clobber

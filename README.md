@@ -7,23 +7,26 @@ Remux is a self-hosted tmux controller for resuming terminal work from web, iOS,
 - A server or laptop that can run `tmux`.
 - Node.js 24 or newer on the server.
 - Network reachability from the phone to the server. Tailscale, WireGuard, or another private VPN is recommended.
-- The Android APK and server CLI artifacts from GitHub Actions.
+- The Android APK and server CLI assets from the latest GitHub Release.
 
 The server controls tmux on the same machine where it runs. If you already have tmux sessions there, Remux can reuse them.
 
 ## Download Builds
 
-GitHub Actions builds two artifacts on every push to `main` and on manual runs:
+GitHub Actions publishes build outputs to the `latest` GitHub Release on every push to `main` and on manual runs.
 
-- `remux-android-apk`: Android APK plus SHA-256 checksum.
-- `remux-server-cli`: standalone Node server CLI plus SHA-256 checksum.
+Download from:
 
-To download them:
+```text
+https://github.com/bangnokia/remux/releases/latest
+```
 
-1. Open the GitHub repo.
-2. Go to **Actions**.
-3. Open the latest successful **Build Remux** run.
-4. Download `remux-android-apk` and `remux-server-cli` from the artifacts section.
+Release assets:
+
+- `remux-android-release.apk`: Android APK.
+- `remux-android-release.apk.sha256`: Android APK SHA-256 checksum.
+- `remux-server-node24.tar.gz`: standalone Node 24 server CLI.
+- `remux-server-node24.tar.gz.sha256`: server CLI SHA-256 checksum.
 
 You can also build them locally:
 
@@ -51,7 +54,7 @@ node --version
 tmux -V
 ```
 
-Unpack the server artifact:
+Download `remux-server-node24.tar.gz` from the latest GitHub Release, then unpack it on the server:
 
 ```bash
 mkdir -p ~/remux
@@ -156,7 +159,7 @@ journalctl -u remux -f
 
 ## Android Setup
 
-Install the APK from the `remux-android-apk` artifact.
+Install `remux-android-release.apk` from the latest GitHub Release.
 
 If you downloaded the APK on a computer:
 
