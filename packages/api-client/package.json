@@ -1,6 +1,6 @@
 {
   "name": "@telemux/api-client",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@telemux/protocol": "0.1.2"
+    "@telemux/protocol": "0.1.3"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

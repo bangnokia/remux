@@ -1,6 +1,6 @@
 {
   "name": "@telemux/server",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,8 +13,8 @@
   "dependencies": {
     "@fastify/cors": "^11.0.1",
     "@fastify/websocket": "^11.0.1",
-    "@telemux/config": "0.1.2",
-    "@telemux/protocol": "0.1.2",
+    "@telemux/config": "0.1.3",
+    "@telemux/protocol": "0.1.3",
     "fastify": "^5.3.3",
     "ws": "^8.18.2"
   },
