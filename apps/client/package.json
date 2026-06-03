@@ -1,6 +1,6 @@
 {
   "name": "@remux/client",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -16,8 +16,8 @@
     "@expo/metro-runtime": "~56.0.13",
     "@expo/ui": "~56.0.15",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@remux/api-client": "0.1.1",
-    "@remux/protocol": "0.1.1",
+    "@remux/api-client": "0.1.2",
+    "@remux/protocol": "0.1.2",
     "expo": "^56.0.8",
     "expo-build-properties": "~56.0.16",
     "expo-system-ui": "~56.0.5",

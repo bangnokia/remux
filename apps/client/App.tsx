@@ -35,6 +35,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  statusBarHeight,
   useWindowDimensions,
   View
 } from "./src/rn";
@@ -45,6 +46,14 @@ import type { TerminalPaneHandle } from "./src/terminal-types";
 type IconType = React.ComponentType<{ color?: string; size?: number; strokeWidth?: number }>;
 type ExpoIconName = React.ComponentProps<typeof ExpoIcon>["name"];
 type RenameTarget = { kind: "session" | "window"; id: string; name: string } | null;
+type AppBottomSheetProps = {
+  children: React.ReactElement;
+  isPresented: boolean;
+  onDismiss(): void;
+  showDragIndicator?: boolean;
+  snapPoints?: React.ComponentProps<typeof ExpoBottomSheet>["snapPoints"];
+};
+type AndroidModalBottomSheetRef = import("@expo/ui/jetpack-compose").ModalBottomSheetRef;
 
 const ENV_SERVER_URL =
   typeof process !== "undefined" ? process.env.EXPO_PUBLIC_REMUX_SERVER_URL?.trim() : undefined;
@@ -373,8 +382,8 @@ export default function App(): React.ReactElement {
   }
 
   return (
-    <SafeAreaView style={styles.root}>
-      <StatusBar barStyle="light-content" />
+    <SafeAreaView style={[styles.root, Platform.OS === "android" ? styles.androidSafeArea : null]}>
+      <StatusBar barStyle="light-content" backgroundColor={palette.bg} translucent={false} />
       <View style={styles.app}>
         <View style={[styles.workspace, wide ? styles.workspaceWide : null]}>
           {wide ? (
@@ -440,35 +449,32 @@ export default function App(): React.ReactElement {
           onMenu={() => setShowSwitcher((value) => !value)}
         />
 
-        <ExpoBottomSheet
+        <AppBottomSheet
           isPresented={showSwitcher}
           onDismiss={handleSwitcherDismiss}
           showDragIndicator
           snapPoints={[{ fraction: 0.58 }, "full"]}
-          modifiers={Platform.OS === "ios" ? [presentationBackground(palette.bg)] : undefined}
         >
-          <ExpoRNHostView>
-            <View style={[styles.sheetContent, { width: sheetWidth }]}>
-              <View style={styles.sheetHeader}>
-                <Text style={styles.sheetTitle}>Sessions</Text>
-                <View style={styles.sheetHeaderActions}>
-                  <IconButton icon={Home} iosSymbol="house" label="Home" onPress={returnHome} />
-                  <IconButton icon={Plus} iosSymbol="plus" label="New session" onPress={() => void createSession()} />
-                </View>
+          <View style={[styles.sheetContent, { width: sheetWidth }]}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Sessions</Text>
+              <View style={styles.sheetHeaderActions}>
+                <IconButton icon={Home} iosSymbol="house" label="Home" onPress={returnHome} />
+                <IconButton icon={Plus} iosSymbol="plus" label="New session" onPress={() => void createSession()} />
               </View>
-              <SessionSheet
-                selectedWindowId={selected?.window.id ?? null}
-                tree={tree}
-                onCreateSession={() => void createSession()}
-                onCreateWindow={(sessionId) => void createWindowForSession(sessionId)}
-                onDeleteSession={(sessionId) => void deleteSession(sessionId)}
-                onDeleteWindow={(windowId) => void deleteWindow(windowId)}
-                onRename={openRenameFromSwitcher}
-                onSelectWindow={selectWindow}
-              />
             </View>
-          </ExpoRNHostView>
-        </ExpoBottomSheet>
+            <SessionSheet
+              selectedWindowId={selected?.window.id ?? null}
+              tree={tree}
+              onCreateSession={() => void createSession()}
+              onCreateWindow={(sessionId) => void createWindowForSession(sessionId)}
+              onDeleteSession={(sessionId) => void deleteSession(sessionId)}
+              onDeleteWindow={(windowId) => void deleteWindow(windowId)}
+              onRename={openRenameFromSwitcher}
+              onSelectWindow={selectWindow}
+            />
+          </View>
+        </AppBottomSheet>
 
         {renameTarget ? (
           <RenameSheet
@@ -479,6 +485,125 @@ export default function App(): React.ReactElement {
         ) : null}
       </View>
     </SafeAreaView>
+  );
+}
+
+function AppBottomSheet({
+  children,
+  isPresented,
+  onDismiss,
+  showDragIndicator,
+  snapPoints
+}: AppBottomSheetProps): React.ReactElement | null {
+  if (Platform.OS === "android") {
+    return (
+      <AndroidDarkBottomSheet
+        isPresented={isPresented}
+        onDismiss={onDismiss}
+        showDragIndicator={showDragIndicator}
+        snapPoints={snapPoints}
+      >
+        {children}
+      </AndroidDarkBottomSheet>
+    );
+  }
+
+  return (
+    <ExpoBottomSheet
+      isPresented={isPresented}
+      onDismiss={onDismiss}
+      showDragIndicator={showDragIndicator}
+      snapPoints={snapPoints}
+      modifiers={[presentationBackground(palette.bg)]}
+    >
+      <ExpoRNHostView>{children}</ExpoRNHostView>
+    </ExpoBottomSheet>
+  );
+}
+
+function AndroidDarkBottomSheet({
+  children,
+  isPresented,
+  onDismiss,
+  showDragIndicator = true,
+  snapPoints
+}: AppBottomSheetProps): React.ReactElement | null {
+  const { Column, Host, ModalBottomSheet, RNHostView } =
+    require("@expo/ui/jetpack-compose") as typeof import("@expo/ui/jetpack-compose");
+  const { background, fillMaxHeight, padding } =
+    require("@expo/ui/jetpack-compose/modifiers") as typeof import("@expo/ui/jetpack-compose/modifiers");
+  const sheetRef = useRef<AndroidModalBottomSheetRef>(null);
+  const [mounted, setMounted] = useState(isPresented);
+
+  useEffect(() => {
+    if (isPresented) {
+      setMounted(true);
+      return;
+    }
+
+    let cancelled = false;
+    sheetRef.current?.hide().then(() => {
+      if (!cancelled) {
+        setMounted(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPresented]);
+
+  if (!mounted) {
+    return null;
+  }
+
+  const contentModifiers = [
+    padding(16, showDragIndicator ? 0 : 16, 16, 0),
+    background(palette.bg)
+  ];
+  if (shouldFillMaxHeight(snapPoints)) {
+    contentModifiers.push(fillMaxHeight());
+  }
+
+  return (
+    <Host colorScheme="dark" pointerEvents="none" style={styles.androidSheetHost}>
+      <ModalBottomSheet
+        ref={sheetRef}
+        containerColor={palette.bg}
+        contentColor={palette.text}
+        onDismissRequest={onDismiss}
+        scrimColor="rgba(0, 0, 0, 0.58)"
+        showDragHandle={showDragIndicator}
+        skipPartiallyExpanded={shouldSkipPartiallyExpanded(snapPoints)}
+      >
+        <Column modifiers={contentModifiers}>
+          <RNHostView>{children}</RNHostView>
+        </Column>
+      </ModalBottomSheet>
+    </Host>
+  );
+}
+
+function shouldSkipPartiallyExpanded(snapPoints: AppBottomSheetProps["snapPoints"]): boolean {
+  if (!snapPoints?.length) {
+    return false;
+  }
+
+  return !snapPoints.some((snapPoint) =>
+    snapPoint === "half" ||
+    (typeof snapPoint === "object" && "fraction" in snapPoint && snapPoint.fraction < 1) ||
+    (typeof snapPoint === "object" && "height" in snapPoint)
+  );
+}
+
+function shouldFillMaxHeight(snapPoints: AppBottomSheetProps["snapPoints"]): boolean {
+  if (!snapPoints?.length) {
+    return false;
+  }
+
+  return snapPoints.some((snapPoint) =>
+    snapPoint === "full" ||
+    (typeof snapPoint === "object" && "fraction" in snapPoint && snapPoint.fraction >= 1)
   );
 }
 
@@ -525,8 +650,8 @@ function WelcomeScreen({
   }, [hasSavedServers]);
 
   return (
-    <SafeAreaView style={styles.root}>
-      <StatusBar barStyle="light-content" />
+    <SafeAreaView style={[styles.root, Platform.OS === "android" ? styles.androidSafeArea : null]}>
+      <StatusBar barStyle="light-content" backgroundColor={palette.bg} translucent={false} />
       <ScrollView
         keyboardShouldPersistTaps="handled"
         style={styles.setupScroll}
@@ -578,30 +703,27 @@ function WelcomeScreen({
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
         </View>
       </ScrollView>
-      <ExpoBottomSheet
+      <AppBottomSheet
         isPresented={showAddServerSheet}
         onDismiss={() => setShowAddServerSheet(false)}
         showDragIndicator
         snapPoints={[{ fraction: 0.58 }, "full"]}
-        modifiers={Platform.OS === "ios" ? [presentationBackground(palette.bg)] : undefined}
       >
-        <ExpoRNHostView>
-          <View style={[styles.addServerSheetContent, { width: sheetWidth }]}>
-            <AddServerForm
-              busy={busy}
-              formConnecting={formConnecting}
-              setupHost={setupHost}
-              setupLabel={setupLabel}
-              setupPort={setupPort}
-              onCancel={hasSavedServers ? () => setShowAddServerSheet(false) : undefined}
-              onConnect={onConnect}
-              onSetupHostChange={onSetupHostChange}
-              onSetupLabelChange={onSetupLabelChange}
-              onSetupPortChange={onSetupPortChange}
-            />
-          </View>
-        </ExpoRNHostView>
-      </ExpoBottomSheet>
+        <View style={[styles.addServerSheetContent, { width: sheetWidth }]}>
+          <AddServerForm
+            busy={busy}
+            formConnecting={formConnecting}
+            setupHost={setupHost}
+            setupLabel={setupLabel}
+            setupPort={setupPort}
+            onCancel={hasSavedServers ? () => setShowAddServerSheet(false) : undefined}
+            onConnect={onConnect}
+            onSetupHostChange={onSetupHostChange}
+            onSetupLabelChange={onSetupLabelChange}
+            onSetupPortChange={onSetupPortChange}
+          />
+        </View>
+      </AppBottomSheet>
     </SafeAreaView>
   );
 }
@@ -1340,6 +1462,9 @@ const styles = StyleSheet.create({
     backgroundColor: palette.bg,
     flex: 1
   },
+  androidSafeArea: {
+    paddingTop: statusBarHeight
+  },
   app: {
     backgroundColor: palette.bg,
     flex: 1,
@@ -1690,6 +1815,9 @@ const styles = StyleSheet.create({
     paddingBottom: 26,
     paddingHorizontal: 2,
     paddingTop: 2
+  },
+  androidSheetHost: {
+    position: "absolute"
   },
   sheetHeader: {
     alignItems: "center",

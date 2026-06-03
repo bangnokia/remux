@@ -16,4 +16,5 @@ export const View = RN.View as unknown as React.ComponentType<RN.ViewProps>;
 export const Alert = RN.Alert;
 export const Platform = RN.Platform;
 export const StyleSheet = RN.StyleSheet;
+export const statusBarHeight = RN.StatusBar.currentHeight ?? 0;
 export const useWindowDimensions = RN.useWindowDimensions;
