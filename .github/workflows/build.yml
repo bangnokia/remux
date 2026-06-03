@@ -1,4 +1,4 @@
-name: Build Remux
+name: Build Telemux
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: remux-build-${{ github.ref }}
+  group: telemux-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -44,15 +44,15 @@ jobs:
         run: npm run build:server:standalone
 
       - name: Smoke test server CLI
-        run: node dist/remux-server.mjs --help
+        run: node dist/telemux-server.mjs --help
 
       - name: Package server CLI
         run: |
-          tar -czf dist/remux-server-node24.tar.gz -C dist remux-server.mjs
-          sha256sum dist/remux-server-node24.tar.gz > dist/remux-server-node24.tar.gz.sha256
+          tar -czf dist/telemux-server-node24.tar.gz -C dist telemux-server.mjs
+          sha256sum dist/telemux-server-node24.tar.gz > dist/telemux-server-node24.tar.gz.sha256
 
       - name: Prebuild Android project
-        run: npm --workspace @remux/client run prebuild:android
+        run: npm --workspace @telemux/client run prebuild:android
 
       - name: Tune Gradle memory
         run: |
@@ -79,8 +79,8 @@ jobs:
             echo "No release APK was produced."
             exit 1
           fi
-          cp "$APK_PATH" dist/android/remux-android-release.apk
-          sha256sum dist/android/remux-android-release.apk > dist/android/remux-android-release.apk.sha256
+          cp "$APK_PATH" dist/android/telemux-android-release.apk
+          sha256sum dist/android/telemux-android-release.apk > dist/android/telemux-android-release.apk.sha256
 
       - name: Build iOS IPA with EAS
         env:
@@ -122,25 +122,25 @@ jobs:
           fs.writeFileSync("dist/eas-ios-build-url.txt", `${artifactUrl}\n`);
           NODE
 
-          curl -fL "$(cat dist/eas-ios-build-url.txt)" -o dist/ios/remux-ios-release.ipa
-          sha256sum dist/ios/remux-ios-release.ipa > dist/ios/remux-ios-release.ipa.sha256
+          curl -fL "$(cat dist/eas-ios-build-url.txt)" -o dist/ios/telemux-ios-release.ipa
+          sha256sum dist/ios/telemux-ios-release.ipa > dist/ios/telemux-ios-release.ipa.sha256
 
       - name: Write release notes
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         run: |
           cat > dist/release-notes.md <<EOF
-          Automated Remux build for ${GITHUB_REF_NAME} from commit ${GITHUB_SHA}.
+          Automated Telemux build for ${GITHUB_REF_NAME} from commit ${GITHUB_SHA}.
 
           Assets:
-          - remux-android-release.apk
-          - remux-android-release.apk.sha256
-          - remux-server-node24.tar.gz
-          - remux-server-node24.tar.gz.sha256
+          - telemux-android-release.apk
+          - telemux-android-release.apk.sha256
+          - telemux-server-node24.tar.gz
+          - telemux-server-node24.tar.gz.sha256
           EOF
-          if [ -f dist/ios/remux-ios-release.ipa ]; then
+          if [ -f dist/ios/telemux-ios-release.ipa ]; then
             cat >> dist/release-notes.md <<EOF
-          - remux-ios-release.ipa
-          - remux-ios-release.ipa.sha256
+          - telemux-ios-release.ipa
+          - telemux-ios-release.ipa.sha256
           EOF
           else
             cat >> dist/release-notes.md <<EOF
@@ -155,7 +155,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RELEASE_TAG="${GITHUB_REF_NAME}"
-          RELEASE_TITLE="Remux ${RELEASE_TAG}"
+          RELEASE_TITLE="Telemux ${RELEASE_TAG}"
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
@@ -168,16 +168,16 @@ jobs:
           fi
 
           ASSETS=(
-            dist/android/remux-android-release.apk
-            dist/android/remux-android-release.apk.sha256
-            dist/remux-server-node24.tar.gz
-            dist/remux-server-node24.tar.gz.sha256
+            dist/android/telemux-android-release.apk
+            dist/android/telemux-android-release.apk.sha256
+            dist/telemux-server-node24.tar.gz
+            dist/telemux-server-node24.tar.gz.sha256
           )
 
-          if [ -f dist/ios/remux-ios-release.ipa ]; then
+          if [ -f dist/ios/telemux-ios-release.ipa ]; then
             ASSETS+=(
-              dist/ios/remux-ios-release.ipa
-              dist/ios/remux-ios-release.ipa.sha256
+              dist/ios/telemux-ios-release.ipa
+              dist/ios/telemux-ios-release.ipa.sha256
             )
           fi
 

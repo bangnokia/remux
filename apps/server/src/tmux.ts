@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { TmuxPane, TmuxSession, TmuxTree, TmuxWindow } from "@remux/protocol";
+import type { TmuxPane, TmuxSession, TmuxTree, TmuxWindow } from "@telemux/protocol";
 import { badRequest, notFound } from "./errors.js";
 
 const execFileAsync = promisify(execFile);

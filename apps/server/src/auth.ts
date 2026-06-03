@@ -73,7 +73,7 @@ export function readBearerToken(header: string | undefined): string | null {
 }
 
 export function hashToken(token: string): string {
-  return createHash("sha256").update(`remux:v1:${token}`).digest("hex");
+  return createHash("sha256").update(`telemux:v1:${token}`).digest("hex");
 }
 
 function secureEqual(left: string, right: string): boolean {

@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "Remux",
-    "slug": "remux",
+    "name": "Telemux",
+    "slug": "telemux",
     "version": "0.1.2",
     "orientation": "portrait",
-    "scheme": "remux",
+    "scheme": "telemux",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.bangnokia.remux",
+      "bundleIdentifier": "com.bangnokia.telemux",
       "buildNumber": "4",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -18,7 +18,7 @@
       "adaptiveIcon": {
         "backgroundColor": "#101412"
       },
-      "package": "com.bangnokia.remux",
+      "package": "com.bangnokia.telemux",
       "versionCode": 3
     },
     "web": {

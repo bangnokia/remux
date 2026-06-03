@@ -56,7 +56,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
 
   const syncViewportSize = useCallback((width: number, height: number) => {
     webViewRef.current?.injectJavaScript(
-      `window.remuxSetViewportSize && window.remuxSetViewportSize(${Math.floor(width)}, ${Math.floor(height)}); true;`
+      `window.telemuxSetViewportSize && window.telemuxSetViewportSize(${Math.floor(width)}, ${Math.floor(height)}); true;`
     );
   }, []);
 
@@ -66,7 +66,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         return;
       }
 
-      webViewRef.current?.injectJavaScript(`window.remuxSend(${JSON.stringify(data)}); true;`);
+      webViewRef.current?.injectJavaScript(`window.telemuxSend(${JSON.stringify(data)}); true;`);
     },
     []
   );
@@ -104,7 +104,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       focusKeyboardProxy();
     },
     fit() {
-      webViewRef.current?.injectJavaScript("window.remuxFit && window.remuxFit(); true;");
+      webViewRef.current?.injectJavaScript("window.telemuxFit && window.telemuxFit(); true;");
     }
   }), [focusKeyboardProxy, sendToTerminal]);
 
@@ -188,7 +188,7 @@ function terminalHtml(wsUrl: string): string {
     ${terminalFontCss}
 
     :root {
-      --remux-terminal-top-padding: ${TERMINAL_TOP_PADDING}px;
+      --telemux-terminal-top-padding: ${TERMINAL_TOP_PADDING}px;
     }
 
     html, body, #terminal {
@@ -208,13 +208,13 @@ function terminalHtml(wsUrl: string): string {
 
     #terminal {
       caret-color: transparent !important;
-      height: calc(var(--remux-height, 100vh) - var(--remux-terminal-top-padding));
+      height: calc(var(--telemux-height, 100vh) - var(--telemux-terminal-top-padding));
       outline: none !important;
       position: fixed;
       left: 0;
-      top: var(--remux-terminal-top-padding);
+      top: var(--telemux-terminal-top-padding);
       -webkit-tap-highlight-color: transparent;
-      width: var(--remux-width, 100vw);
+      width: var(--telemux-width, 100vw);
     }
 
     #terminal *,
@@ -255,7 +255,7 @@ function terminalHtml(wsUrl: string): string {
     const terminalFontFamily = ${encodedTerminalFontFamily};
     const terminalTopPadding = ${TERMINAL_TOP_PADDING};
 
-    window.remuxFit = () => {
+    window.telemuxFit = () => {
       try {
         applyViewportSize();
         if (!fitToNativeViewport()) {
@@ -265,20 +265,20 @@ function terminalHtml(wsUrl: string): string {
       } catch {}
     };
 
-    window.remuxSetViewportSize = (width, height) => {
+    window.telemuxSetViewportSize = (width, height) => {
       if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
       nativeViewportWidth = Math.floor(width);
       nativeViewportHeight = Math.floor(height);
-      document.documentElement.style.setProperty('--remux-width', width + 'px');
-      document.documentElement.style.setProperty('--remux-height', height + 'px');
+      document.documentElement.style.setProperty('--telemux-width', width + 'px');
+      document.documentElement.style.setProperty('--telemux-height', height + 'px');
       scheduleFit();
     };
 
-    window.remuxSend = (data) => {
+    window.telemuxSend = (data) => {
       socket && socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'input', data }));
     };
 
-    window.remuxFocus = () => {
+    window.telemuxFocus = () => {
       try {
         hideNativeCaret();
       } catch {}
@@ -314,7 +314,7 @@ function terminalHtml(wsUrl: string): string {
       });
 
       socket = new WebSocket(${encodedUrl});
-      socket.onopen = () => { post({ type: 'status', value: 'connected' }); window.remuxFit(); window.remuxFocus(); };
+      socket.onopen = () => { post({ type: 'status', value: 'connected' }); window.telemuxFit(); window.telemuxFocus(); };
       socket.onclose = () => post({ type: 'status', value: 'disconnected' });
       socket.onerror = () => post({ type: 'status', value: 'socket error' });
       socket.onmessage = (event) => {
@@ -337,7 +337,7 @@ function terminalHtml(wsUrl: string): string {
           post({ type: 'status', value: message.message });
         }
       };
-      window.addEventListener('resize', window.remuxFit);
+      window.addEventListener('resize', window.telemuxFit);
       setTimeout(hideNativeCaret, 0);
       scheduleFit();
     }
@@ -346,8 +346,8 @@ function terminalHtml(wsUrl: string): string {
       const width = nativeViewportWidth || document.documentElement.clientWidth || window.innerWidth;
       const height = nativeViewportHeight || document.documentElement.clientHeight || window.innerHeight;
       if (width > 0 && height > 0) {
-        document.documentElement.style.setProperty('--remux-width', Math.floor(width) + 'px');
-        document.documentElement.style.setProperty('--remux-height', Math.floor(height) + 'px');
+        document.documentElement.style.setProperty('--telemux-width', Math.floor(width) + 'px');
+        document.documentElement.style.setProperty('--telemux-height', Math.floor(height) + 'px');
       }
     }
 
@@ -380,10 +380,10 @@ function terminalHtml(wsUrl: string): string {
       if (pendingViewportFit) clearTimeout(pendingViewportFit);
       pendingViewportFit = setTimeout(() => {
         pendingViewportFit = undefined;
-        window.remuxFit();
+        window.telemuxFit();
         pendingViewportFit = setTimeout(() => {
           pendingViewportFit = undefined;
-          window.remuxFit();
+          window.telemuxFit();
         }, 120);
       }, 0);
     }

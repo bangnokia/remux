@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import type { Preferences } from "@remux/protocol";
+import type { Preferences } from "@telemux/protocol";
 
 const DEFAULT_PREFERENCES: Preferences = {
   lastPaneId: null,

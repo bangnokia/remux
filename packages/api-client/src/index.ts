@@ -7,29 +7,29 @@ import type {
   ResizePaneRequest,
   SplitPaneRequest,
   TmuxTree
-} from "@remux/protocol";
+} from "@telemux/protocol";
 
-export interface RemuxClientOptions {
+export interface TelemuxClientOptions {
   baseUrl: string;
   token?: string;
 }
 
-export class RemuxApiError extends Error {
+export class TelemuxApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
     public readonly code: string
   ) {
     super(message);
-    this.name = "RemuxApiError";
+    this.name = "TelemuxApiError";
   }
 }
 
-export class RemuxClient {
+export class TelemuxClient {
   private readonly baseUrl: string;
   private readonly token: string;
 
-  constructor(options: RemuxClientOptions) {
+  constructor(options: TelemuxClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.token = options.token?.trim() ?? "";
   }
@@ -125,9 +125,12 @@ export class RemuxClient {
       } catch {
         // Keep the response status text when the body is not JSON.
       }
-      throw new RemuxApiError(message, response.status, code);
+      throw new TelemuxApiError(message, response.status, code);
     }
 
     return response.json() as Promise<T>;
   }
 }
+
+export type RemuxClientOptions = TelemuxClientOptions;
+export { TelemuxApiError as RemuxApiError, TelemuxClient as RemuxClient };

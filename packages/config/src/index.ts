@@ -6,15 +6,16 @@ export interface ServerConfig {
   tmuxSocketName: string | null;
 }
 
-export const DEFAULT_REMUX_PORT = 14441;
+export const DEFAULT_TELEMUX_PORT = 14441;
+export const DEFAULT_REMUX_PORT = DEFAULT_TELEMUX_PORT;
 
 export function readServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   return {
-    host: env.REMUX_HOST ?? "127.0.0.1",
-    port: readPort(env.REMUX_PORT, DEFAULT_REMUX_PORT),
-    databasePath: env.REMUX_DB_PATH ?? "~/.remux/remux.db",
-    token: env.REMUX_TOKEN ?? "",
-    tmuxSocketName: env.REMUX_TMUX_SOCKET ?? null
+    host: env.TELEMUX_HOST ?? env.REMUX_HOST ?? "127.0.0.1",
+    port: readPort(env.TELEMUX_PORT ?? env.REMUX_PORT, DEFAULT_TELEMUX_PORT),
+    databasePath: env.TELEMUX_DB_PATH ?? env.REMUX_DB_PATH ?? "~/.telemux/telemux.db",
+    token: env.TELEMUX_TOKEN ?? env.REMUX_TOKEN ?? "",
+    tmuxSocketName: env.TELEMUX_TMUX_SOCKET ?? env.REMUX_TMUX_SOCKET ?? null
   };
 }
 

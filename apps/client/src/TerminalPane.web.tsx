@@ -1,6 +1,6 @@
 import { FitAddon, Terminal, init } from "ghostty-web";
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-import type { TerminalServerMessage } from "@remux/protocol";
+import type { TerminalServerMessage } from "@telemux/protocol";
 import {
   TERMINAL_FONT_FACE,
   TERMINAL_FONT_FAMILY,
@@ -186,7 +186,7 @@ function installTerminalFontFace(): () => void {
   }
 
   const style = document.createElement("style");
-  style.dataset.remuxTerminalFont = TERMINAL_FONT_FACE;
+  style.dataset.telemuxTerminalFont = TERMINAL_FONT_FACE;
   style.textContent = cssText;
   document.head.appendChild(style);
 

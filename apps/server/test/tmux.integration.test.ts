@@ -26,17 +26,17 @@ afterEach(() => {
 
 describe.runIf(() => hasTmux)("TmuxService", () => {
   it("creates and inspects sessions on an isolated socket", async () => {
-    const socketName = `remux-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const socketName = `telemux-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     sockets.push(socketName);
     const tmux = new TmuxService(socketName);
 
     expect((await tmux.tree()).sessions).toHaveLength(0);
 
-    await tmux.createSession("remux_test");
+    await tmux.createSession("telemux_test");
     const tree = await tmux.tree();
 
     expect(tree.sessions).toHaveLength(1);
-    expect(tree.sessions[0].name).toBe("remux_test");
+    expect(tree.sessions[0].name).toBe("telemux_test");
     expect(tree.sessions[0].windows[0].panes[0].id).toMatch(/^%/);
   });
 });

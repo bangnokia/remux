@@ -4,7 +4,7 @@ import { build } from "esbuild";
 
 const root = resolve(import.meta.dirname, "..");
 const outputDir = resolve(root, "dist");
-const outputFile = resolve(outputDir, "remux-server.mjs");
+const outputFile = resolve(outputDir, "telemux-server.mjs");
 
 await mkdir(outputDir, { recursive: true });
 

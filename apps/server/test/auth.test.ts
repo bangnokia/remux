@@ -45,7 +45,7 @@ describe("initializeAuth", () => {
 });
 
 function createStore(): MetadataStore {
-  const dir = mkdtempSync(join(tmpdir(), "remux-auth-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "telemux-auth-test-"));
   tempDirs.push(dir);
-  return new MetadataStore(join(dir, "remux.db"));
+  return new MetadataStore(join(dir, "telemux.db"));
 }

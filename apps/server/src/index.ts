@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
-import { DEFAULT_REMUX_PORT, readServerConfig } from "@remux/config";
+import { DEFAULT_TELEMUX_PORT, readServerConfig } from "@telemux/config";
 import { initializeAuth } from "./auth.js";
 import { MetadataStore } from "./metadata.js";
 import { registerRoutes } from "./routes.js";
@@ -30,13 +30,13 @@ await registerRoutes(app, { auth, metadata, tmux });
 await app.listen({ host: config.host, port: config.port });
 
 if (!auth.authRequired) {
-  app.log.warn("Remux bearer auth is disabled. Set REMUX_TOKEN to require a token.");
+  app.log.warn("Telemux bearer auth is disabled. Set TELEMUX_TOKEN to require a token.");
 } else if (auth.generatedToken) {
-  app.log.warn(`Generated REMUX bearer token: ${auth.generatedToken}`);
-  app.log.warn("Store this token now or restart with REMUX_TOKEN to rotate it.");
+  app.log.warn(`Generated TELEMUX bearer token: ${auth.generatedToken}`);
+  app.log.warn("Store this token now or restart with TELEMUX_TOKEN to rotate it.");
 }
 
-app.log.info(`Remux server listening on http://${config.host}:${config.port}`);
+app.log.info(`Telemux server listening on http://${config.host}:${config.port}`);
 
 interface CliOptions {
   help: boolean;
@@ -57,7 +57,7 @@ function readCliOptions(args: string[]): CliOptions {
     }
 
     if (arg === "--no-auth") {
-      env.REMUX_TOKEN = "";
+      env.TELEMUX_TOKEN = "";
       continue;
     }
 
@@ -66,23 +66,23 @@ function readCliOptions(args: string[]): CliOptions {
 
     switch (flag) {
       case "--host":
-        env.REMUX_HOST = readCliValue(flag, value);
+        env.TELEMUX_HOST = readCliValue(flag, value);
         index += inlineValue === undefined ? 1 : 0;
         break;
       case "--port":
-        env.REMUX_PORT = readCliValue(flag, value);
+        env.TELEMUX_PORT = readCliValue(flag, value);
         index += inlineValue === undefined ? 1 : 0;
         break;
       case "--token":
-        env.REMUX_TOKEN = readCliValue(flag, value);
+        env.TELEMUX_TOKEN = readCliValue(flag, value);
         index += inlineValue === undefined ? 1 : 0;
         break;
       case "--db-path":
-        env.REMUX_DB_PATH = readCliValue(flag, value);
+        env.TELEMUX_DB_PATH = readCliValue(flag, value);
         index += inlineValue === undefined ? 1 : 0;
         break;
       case "--tmux-socket":
-        env.REMUX_TMUX_SOCKET = readCliValue(flag, value);
+        env.TELEMUX_TMUX_SOCKET = readCliValue(flag, value);
         index += inlineValue === undefined ? 1 : 0;
         break;
       default:
@@ -115,21 +115,23 @@ function readCliValue(flag: string, value: string | undefined): string {
 }
 
 function usage(): string {
-  return `Remux server
+  return `Telemux server
 
 Usage:
-  remux-server [options]
+  telemux-server [options]
 
 Options:
   --host <host>          Host to bind. Default: 127.0.0.1
-  --port <port>          Port to listen on. Default: ${DEFAULT_REMUX_PORT}
+  --port <port>          Port to listen on. Default: ${DEFAULT_TELEMUX_PORT}
   --token <token>        Bearer token required by clients.
   --no-auth              Disable bearer auth. Only use behind a trusted tunnel.
-  --db-path <path>       Metadata database path. Default: ~/.remux/remux.db
+  --db-path <path>       Metadata database path. Default: ~/.telemux/telemux.db
   --tmux-socket <name>   tmux socket name, passed as tmux -L <name>.
   -h, --help             Show this help.
 
 Environment variables with the same behavior:
-  REMUX_HOST, REMUX_PORT, REMUX_TOKEN, REMUX_DB_PATH, REMUX_TMUX_SOCKET
+  TELEMUX_HOST, TELEMUX_PORT, TELEMUX_TOKEN, TELEMUX_DB_PATH, TELEMUX_TMUX_SOCKET
+
+Backward-compatible REMUX_* aliases are still accepted.
 `;
 }

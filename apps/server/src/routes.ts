@@ -6,7 +6,7 @@ import { badRequest, HttpError } from "./errors.js";
 import type { MetadataStore } from "./metadata.js";
 import { TerminalBridge } from "./control-mode.js";
 import type { TmuxService } from "./tmux.js";
-import { REMUX_API_VERSION } from "@remux/protocol";
+import { TELEMUX_API_VERSION } from "@telemux/protocol";
 
 interface RouteContext {
   auth: AuthState;
@@ -44,7 +44,7 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
   app.get("/api/health", async () => ({
     ok: true,
-    version: REMUX_API_VERSION,
+    version: TELEMUX_API_VERSION,
     tmuxVersion: await context.tmux.version()
   }));
 

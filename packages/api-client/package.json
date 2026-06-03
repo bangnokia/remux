@@ -1,5 +1,5 @@
 {
-  "name": "@remux/api-client",
+  "name": "@telemux/api-client",
   "version": "0.1.2",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@remux/protocol": "0.1.2"
+    "@telemux/protocol": "0.1.2"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

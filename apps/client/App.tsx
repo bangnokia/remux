@@ -1,4 +1,4 @@
-import { RemuxClient } from "@remux/api-client";
+import { TelemuxClient } from "@telemux/api-client";
 import {
   BottomSheet as ExpoBottomSheet,
   Host as ExpoHost,
@@ -6,7 +6,7 @@ import {
   RNHostView as ExpoRNHostView
 } from "@expo/ui";
 import { presentationBackground } from "@expo/ui/swift-ui/modifiers";
-import type { TmuxPane, TmuxSession, TmuxTree, TmuxWindow } from "@remux/protocol";
+import type { TmuxPane, TmuxSession, TmuxTree, TmuxWindow } from "@telemux/protocol";
 import {
   ArrowDown,
   ArrowUp,
@@ -56,8 +56,10 @@ type AppBottomSheetProps = {
 type AndroidModalBottomSheetRef = import("@expo/ui/jetpack-compose").ModalBottomSheetRef;
 
 const ENV_SERVER_URL =
-  typeof process !== "undefined" ? process.env.EXPO_PUBLIC_REMUX_SERVER_URL?.trim() : undefined;
-const DEFAULT_REMUX_PORT = "14441";
+  typeof process !== "undefined"
+    ? (process.env.EXPO_PUBLIC_TELEMUX_SERVER_URL ?? process.env.EXPO_PUBLIC_REMUX_SERVER_URL)?.trim()
+    : undefined;
+const DEFAULT_TELEMUX_PORT = "14441";
 const DEFAULT_SERVER_FIELDS = readDefaultServerFields();
 const DEFAULT_SETUP_HOST = DEFAULT_SERVER_FIELDS.host;
 const DEFAULT_SETUP_PORT = DEFAULT_SERVER_FIELDS.port;
@@ -92,7 +94,7 @@ export default function App(): React.ReactElement {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
 
-  const client = useMemo(() => (connection ? new RemuxClient(connection) : null), [connection]);
+  const client = useMemo(() => (connection ? new TelemuxClient(connection) : null), [connection]);
   const selected = useMemo(() => findSelectedTarget(tree, selectedPaneId), [tree, selectedPaneId]);
   const terminalUrl = client && selectedPaneId ? client.terminalWebSocketUrl(selectedPaneId) : null;
   const terminalBottomInset = COMMAND_BAR_HEIGHT + keyboardHeight;
@@ -219,7 +221,7 @@ export default function App(): React.ReactElement {
     setError(null);
     setConnectingConnectionId(options.save ? NEW_CONNECTION_ID : nextConnection.id);
     try {
-      const nextClient = new RemuxClient(nextConnection);
+      const nextClient = new TelemuxClient(nextConnection);
       await nextClient.health();
       if (options.save) {
         const nextConnections = await saveConnection(nextConnection, connections);
@@ -660,7 +662,7 @@ function WelcomeScreen({
         <View style={styles.setup}>
           <View style={styles.setupHeader}>
             <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={palette.accent} size={28} />
-            <Text style={styles.brand}>Remux</Text>
+            <Text style={styles.brand}>Telemux</Text>
             <Text style={styles.muted}>Connect to a tmux host reachable through your tunnel or VPN.</Text>
           </View>
 
@@ -781,7 +783,7 @@ function AddServerForm({
         autoCorrect={false}
         keyboardType="number-pad"
         onChangeText={onSetupPortChange}
-        placeholder={DEFAULT_REMUX_PORT}
+        placeholder={DEFAULT_TELEMUX_PORT}
         placeholderTextColor={palette.muted}
         style={styles.input}
         value={setupPort}
@@ -1329,13 +1331,13 @@ function readDefaultServerFields(): { host: string; port: string } {
   if (envFields?.host) {
     return {
       host: envFields.host,
-      port: envFields.port ?? DEFAULT_REMUX_PORT
+      port: envFields.port ?? DEFAULT_TELEMUX_PORT
     };
   }
 
   return {
     host: Platform.OS === "android" ? "10.0.2.2" : "127.0.0.1",
-    port: DEFAULT_REMUX_PORT
+    port: DEFAULT_TELEMUX_PORT
   };
 }
 
@@ -1347,9 +1349,9 @@ function buildConnectionFromFields(labelInput: string, hostInput: string, portIn
   }
 
   const typedPort = portInput.trim();
-  const port = parsedHost?.port && (!typedPort || typedPort === DEFAULT_REMUX_PORT)
+  const port = parsedHost?.port && (!typedPort || typedPort === DEFAULT_TELEMUX_PORT)
     ? parsedHost.port
-    : typedPort || DEFAULT_REMUX_PORT;
+    : typedPort || DEFAULT_TELEMUX_PORT;
   if (!isValidPort(port)) {
     return "Port must be between 1 and 65535.";
   }

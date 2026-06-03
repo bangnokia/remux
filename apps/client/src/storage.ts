@@ -9,8 +9,10 @@ export interface SavedConnection {
   token: string;
 }
 
-const CONNECTION_KEY = "remux.connection";
-const CONNECTIONS_KEY = "remux.connections.v1";
+const CONNECTION_KEY = "telemux.connection";
+const CONNECTIONS_KEY = "telemux.connections.v1";
+const LEGACY_CONNECTION_KEY = "remux.connection";
+const LEGACY_CONNECTIONS_KEY = "remux.connections.v1";
 
 export async function loadConnections(): Promise<SavedConnection[]> {
   const raw = await AsyncStorage.getItem(CONNECTIONS_KEY);
@@ -19,13 +21,20 @@ export async function loadConnections(): Promise<SavedConnection[]> {
     return storedConnections;
   }
 
+  const legacyConnections = parseConnections(await AsyncStorage.getItem(LEGACY_CONNECTIONS_KEY));
+  if (legacyConnections.length > 0) {
+    await saveConnections(legacyConnections);
+    await AsyncStorage.removeItem(LEGACY_CONNECTIONS_KEY);
+    return legacyConnections;
+  }
+
   const legacyConnection = await loadLegacyConnection();
   if (!legacyConnection) {
     return [];
   }
 
   await saveConnections([legacyConnection]);
-  await AsyncStorage.removeItem(CONNECTION_KEY);
+  await AsyncStorage.multiRemove([CONNECTION_KEY, LEGACY_CONNECTION_KEY]);
   return [legacyConnection];
 }
 
@@ -51,7 +60,7 @@ export async function deleteConnection(
 }
 
 export async function clearConnections(): Promise<void> {
-  await AsyncStorage.multiRemove([CONNECTION_KEY, CONNECTIONS_KEY]);
+  await AsyncStorage.multiRemove([CONNECTION_KEY, CONNECTIONS_KEY, LEGACY_CONNECTION_KEY, LEGACY_CONNECTIONS_KEY]);
 }
 
 async function saveConnections(connections: SavedConnection[]): Promise<void> {
@@ -59,7 +68,7 @@ async function saveConnections(connections: SavedConnection[]): Promise<void> {
 }
 
 async function loadLegacyConnection(): Promise<SavedConnection | null> {
-  const raw = await AsyncStorage.getItem(CONNECTION_KEY);
+  const raw = await AsyncStorage.getItem(CONNECTION_KEY) ?? await AsyncStorage.getItem(LEGACY_CONNECTION_KEY);
   if (!raw) {
     return null;
   }

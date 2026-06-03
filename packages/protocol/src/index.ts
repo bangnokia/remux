@@ -1,4 +1,5 @@
-export const REMUX_API_VERSION = "0.1.1";
+export const TELEMUX_API_VERSION = "0.1.1";
+export const REMUX_API_VERSION = TELEMUX_API_VERSION;
 
 export type TmuxId = string;
 

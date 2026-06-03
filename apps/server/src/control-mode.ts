@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { RawData, WebSocket } from "ws";
-import type { TerminalClientMessage, TerminalServerMessage } from "@remux/protocol";
+import type { TerminalClientMessage, TerminalServerMessage } from "@telemux/protocol";
 import type { MetadataStore } from "./metadata.js";
 import type { TmuxService } from "./tmux.js";
 
@@ -60,8 +60,9 @@ export class TerminalBridge {
     }
 
     try {
-      if (process.env.REMUX_DEBUG_TERMINAL === "1" && message.type === "input") {
-        console.log(`[remux terminal input] ${JSON.stringify(message.data)}`);
+      const debugTerminal = process.env.TELEMUX_DEBUG_TERMINAL ?? process.env.REMUX_DEBUG_TERMINAL;
+      if (debugTerminal === "1" && message.type === "input") {
+        console.log(`[telemux terminal input] ${JSON.stringify(message.data)}`);
       }
 
       if (message.type === "input") {
