@@ -2,6 +2,13 @@ import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } 
 import { Keyboard as NativeKeyboard, TextInput as NativeTextInput } from "react-native";
 import { WebView } from "react-native-webview";
 import { StyleSheet, View } from "./rn";
+import {
+  TERMINAL_FONT_FACE,
+  TERMINAL_FONT_FAMILY,
+  TERMINAL_TOP_PADDING,
+  resolveTerminalFontUri,
+  terminalFontFaceCss
+} from "./terminal-font";
 import type { TerminalPaneHandle, TerminalPaneProps } from "./terminal-types";
 
 const KEYBOARD_PROXY_VALUE = " ";
@@ -9,7 +16,6 @@ const KEYBOARD_PROXY_SELECTION = {
   end: KEYBOARD_PROXY_VALUE.length,
   start: KEYBOARD_PROXY_VALUE.length
 };
-
 const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane(
   { wsUrl, onStatus, onTreeChanged },
   ref
@@ -18,10 +24,6 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   const keyboardInputRef = useRef<NativeTextInput>(null);
   const lastLayoutRef = useRef<{ width: number; height: number } | null>(null);
   const html = useMemo(() => terminalHtml(wsUrl), [wsUrl]);
-
-  const focusWebTerminal = useCallback(() => {
-    webViewRef.current?.injectJavaScript("window.remuxFocus && window.remuxFocus(); true;");
-  }, []);
 
   const resetKeyboardProxy = useCallback(() => {
     keyboardInputRef.current?.setNativeProps({
@@ -38,11 +40,6 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       keyboardInputRef.current?.focus();
     });
   }, [resetKeyboardProxy]);
-
-  const focusTerminal = useCallback(() => {
-    focusWebTerminal();
-    focusKeyboardProxy();
-  }, [focusKeyboardProxy, focusWebTerminal]);
 
   const handleLayout = useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
     const { width, height } = event.nativeEvent.layout;
@@ -96,11 +93,12 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     dismissKeyboard() {
       keyboardInputRef.current?.blur();
       NativeKeyboard.dismiss();
-      focusWebTerminal();
     },
     send(data: string) {
       sendToTerminal(data);
-      focusWebTerminal();
+    },
+    sendInput(data: string) {
+      sendToTerminal(data);
     },
     focusKeyboard() {
       focusKeyboardProxy();
@@ -108,7 +106,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     fit() {
       webViewRef.current?.injectJavaScript("window.remuxFit && window.remuxFit(); true;");
     }
-  }), [focusKeyboardProxy, focusWebTerminal, sendToTerminal]);
+  }), [focusKeyboardProxy, sendToTerminal]);
 
   function handleMessage(event: unknown): void {
     const data = readWebViewMessageData(event);
@@ -116,6 +114,8 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       const message = JSON.parse(data) as { type: string; value?: string };
       if (message.type === "status") {
         onStatus(message.value ?? "");
+      } else if (message.type === "focus") {
+        focusKeyboardProxy();
       } else if (message.type === "treeChanged") {
         onTreeChanged();
       }
@@ -125,7 +125,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   }
 
   return (
-    <View onLayout={handleLayout} onTouchEnd={focusKeyboardProxy} onTouchStart={focusTerminal} style={styles.shell}>
+    <View onLayout={handleLayout} style={styles.shell}>
       <WebView
         ref={webViewRef}
         originWhitelist={["*"]}
@@ -142,6 +142,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         contentInsetAdjustmentBehavior="never"
         hideKeyboardAccessoryView
         keyboardDisplayRequiresUserAction={false}
+        pointerEvents="none"
         scrollEnabled={false}
       />
       <NativeTextInput
@@ -157,6 +158,8 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         multiline
         onChangeText={handleKeyboardProxyChange}
         onFocus={resetKeyboardProxy}
+        onPressIn={focusKeyboardProxy}
+        onTouchStart={focusKeyboardProxy}
         selection={KEYBOARD_PROXY_SELECTION}
         showSoftInputOnFocus
         spellCheck={false}
@@ -173,11 +176,21 @@ function readWebViewMessageData(event: unknown): string {
 
 function terminalHtml(wsUrl: string): string {
   const encodedUrl = JSON.stringify(wsUrl);
+  const terminalFontUri = resolveTerminalFontUri();
+  const terminalFontCss = terminalFontFaceCss(terminalFontUri);
+  const encodedTerminalFontFace = JSON.stringify(TERMINAL_FONT_FACE);
+  const encodedTerminalFontFamily = JSON.stringify(TERMINAL_FONT_FAMILY);
   return `<!doctype html>
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
   <style>
+    ${terminalFontCss}
+
+    :root {
+      --remux-terminal-top-padding: ${TERMINAL_TOP_PADDING}px;
+    }
+
     html, body, #terminal {
       width: 100%;
       height: 100%;
@@ -195,10 +208,11 @@ function terminalHtml(wsUrl: string): string {
 
     #terminal {
       caret-color: transparent !important;
-      height: var(--remux-height, 100vh);
+      height: calc(var(--remux-height, 100vh) - var(--remux-terminal-top-padding));
       outline: none !important;
       position: fixed;
-      inset: 0;
+      left: 0;
+      top: var(--remux-terminal-top-padding);
       -webkit-tap-highlight-color: transparent;
       width: var(--remux-width, 100vw);
     }
@@ -236,6 +250,10 @@ function terminalHtml(wsUrl: string): string {
     let pendingViewportFit;
     let lastSentCols;
     let lastSentRows;
+    let lastNativeKeyboardFocusAt = 0;
+    const terminalFontFace = ${encodedTerminalFontFace};
+    const terminalFontFamily = ${encodedTerminalFontFamily};
+    const terminalTopPadding = ${TERMINAL_TOP_PADDING};
 
     window.remuxFit = () => {
       try {
@@ -262,26 +280,27 @@ function terminalHtml(wsUrl: string): string {
 
     window.remuxFocus = () => {
       try {
-        term && term.focus && term.focus();
         hideNativeCaret();
       } catch {}
     };
 
     async function main() {
       post({ type: 'status', value: 'terminal loading' });
+      await loadTerminalFont();
       const { FitAddon, Terminal, init } = await importGhostty();
       await init();
       term = new Terminal({
         cursorBlink: true,
         convertEol: true,
         fontSize: 13,
-        fontFamily: 'Menlo, Cascadia Code, monospace',
+        fontFamily: terminalFontFamily,
         theme: { background: '#0d1110', foreground: '#d8e5de', cursor: '#7ce38b', selectionBackground: '#2b3a32' }
       });
       fit = new FitAddon();
       term.loadAddon(fit);
-      term.open(document.getElementById('terminal'));
-      term.focus();
+      const terminalRoot = document.getElementById('terminal');
+      term.open(terminalRoot);
+      installNativeFocusBridge(terminalRoot);
       hideNativeCaret();
       fit.observeResize();
       scheduleFit();
@@ -338,7 +357,7 @@ function terminalHtml(wsUrl: string): string {
       if (!metrics || !metrics.width || !metrics.height) return false;
 
       const width = nativeViewportWidth || document.documentElement.clientWidth || window.innerWidth;
-      const height = nativeViewportHeight || document.documentElement.clientHeight || window.innerHeight;
+      const height = (nativeViewportHeight || document.documentElement.clientHeight || window.innerHeight) - terminalTopPadding;
       if (!width || !height) return false;
 
       const cols = Math.max(20, Math.floor((width - 15) / metrics.width));
@@ -367,6 +386,29 @@ function terminalHtml(wsUrl: string): string {
           window.remuxFit();
         }, 120);
       }, 0);
+    }
+
+    async function loadTerminalFont() {
+      if (!document.fonts || !terminalFontFace) return;
+
+      try {
+        await document.fonts.load('13px "' + terminalFontFace + '"');
+        await document.fonts.ready;
+      } catch {}
+    }
+
+    function installNativeFocusBridge(root) {
+      if (!root) return;
+      const requestNativeKeyboard = () => {
+        const now = Date.now();
+        if (now - lastNativeKeyboardFocusAt < 120) return;
+        lastNativeKeyboardFocusAt = now;
+        post({ type: 'focus' });
+      };
+
+      root.addEventListener('pointerdown', requestNativeKeyboard, { passive: true });
+      root.addEventListener('touchstart', requestNativeKeyboard, { passive: true });
+      root.addEventListener('focusin', requestNativeKeyboard, { passive: true });
     }
 
     function hideNativeCaret() {
@@ -412,12 +454,17 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     bottom: 0,
     color: "transparent",
-    height: 1,
+    fontSize: 16,
+    height: "100%",
     left: 0,
-    opacity: 0.01,
+    lineHeight: 20,
     padding: 0,
     position: "absolute",
-    width: 1
+    right: 0,
+    textAlignVertical: "top",
+    top: 0,
+    width: "100%",
+    zIndex: 2
   }
 });
 

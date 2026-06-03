@@ -3,6 +3,7 @@ export interface TerminalPaneHandle {
   fit(): void;
   focusKeyboard(): void;
   send(data: string): void;
+  sendInput(data: string): void;
 }
 
 export interface TerminalPaneProps {

@@ -6,8 +6,6 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronRight,
-  ChevronDown,
-  ChevronUp,
   Edit3,
   Keyboard as KeyboardIcon,
   Menu,
@@ -17,7 +15,7 @@ import {
   Trash2,
 } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Animated, Easing, Keyboard as NativeKeyboard } from "react-native";
+import { Animated, Easing, Keyboard as NativeKeyboard, TextInput as NativeTextInput } from "react-native";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -46,7 +44,11 @@ const ENV_SERVER_URL =
   typeof process !== "undefined" ? process.env.EXPO_PUBLIC_REMUX_SERVER_URL?.trim() : undefined;
 const DEFAULT_SERVER_URL = ENV_SERVER_URL || (Platform.OS === "android" ? "http://10.0.2.2:8787" : "http://127.0.0.1:8787");
 const COMMAND_BAR_HEIGHT = 52;
-const COMMAND_TOGGLE_HEIGHT = 44;
+const COMMAND_KEYBOARD_PROXY_VALUE = " ";
+const COMMAND_KEYBOARD_PROXY_SELECTION = {
+  end: COMMAND_KEYBOARD_PROXY_VALUE.length,
+  start: COMMAND_KEYBOARD_PROXY_VALUE.length
+};
 type CommandProgress = InstanceType<typeof Animated.Value>;
 
 export default function App(): React.ReactElement {
@@ -54,7 +56,6 @@ export default function App(): React.ReactElement {
   const wide = width >= 760;
   const sheetWidth = Math.max(0, width - 32);
   const terminalRef = useRef<TerminalPaneHandle>(null);
-  const commandProgress = useRef(new Animated.Value(1)).current;
   const keyboardOffset = useRef(new Animated.Value(0)).current;
   const pendingRenameTargetRef = useRef<RenameTarget>(null);
   const [connection, setConnection] = useState<SavedConnection | null>(null);
@@ -65,13 +66,14 @@ export default function App(): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSwitcher, setShowSwitcher] = useState(false);
-  const [commandBarVisible, setCommandBarVisible] = useState(true);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
 
   const client = useMemo(() => (connection ? new RemuxClient(connection) : null), [connection]);
   const selected = useMemo(() => findSelectedTarget(tree, selectedPaneId), [tree, selectedPaneId]);
   const terminalUrl = client && selectedPaneId ? client.terminalWebSocketUrl(selectedPaneId) : null;
+  const terminalBottomInset = COMMAND_BAR_HEIGHT + keyboardHeight;
 
   const refreshTree = useCallback(async () => {
     if (!client) {
@@ -147,20 +149,12 @@ export default function App(): React.ReactElement {
   }, [client, selectedPaneId]);
 
   useEffect(() => {
-    Animated.timing(commandProgress, {
-      duration: commandBarVisible ? 190 : 160,
-      easing: commandBarVisible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
-      toValue: commandBarVisible ? 1 : 0,
-      useNativeDriver: true
-    }).start();
-  }, [commandBarVisible, commandProgress]);
-
-  useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
     const showSubscription = NativeKeyboard.addListener(showEvent, (event) => {
       const height = Math.max(0, event.endCoordinates?.height ?? 0);
+      setKeyboardHeight(height);
       setKeyboardVisible(true);
       Animated.timing(keyboardOffset, {
         duration: Math.max(120, event.duration ?? 220),
@@ -171,6 +165,7 @@ export default function App(): React.ReactElement {
     });
 
     const hideSubscription = NativeKeyboard.addListener(hideEvent, (event) => {
+      setKeyboardHeight(0);
       setKeyboardVisible(false);
       Animated.timing(keyboardOffset, {
         duration: Math.max(120, event.duration ?? 180),
@@ -287,15 +282,11 @@ export default function App(): React.ReactElement {
   }
 
   function sendTerminalKey(data: string): void {
-    terminalRef.current?.send(data);
+    terminalRef.current?.sendInput(data);
   }
 
-  function toggleTerminalKeyboard(): void {
-    if (keyboardVisible) {
-      terminalRef.current?.dismissKeyboard();
-    } else {
-      terminalRef.current?.focusKeyboard();
-    }
+  function sendTerminalInput(data: string): void {
+    terminalRef.current?.sendInput(data);
   }
 
   function flushPendingRename(): void {
@@ -387,17 +378,7 @@ export default function App(): React.ReactElement {
               style={[
                 styles.terminalFrame,
                 {
-                  transform: [
-                    {
-                      translateY: commandProgress.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0, -COMMAND_BAR_HEIGHT]
-                      })
-                    },
-                    {
-                      translateY: Animated.multiply(keyboardOffset, -1)
-                    }
-                  ]
+                  marginBottom: terminalBottomInset
                 }
               ]}
             >
@@ -432,14 +413,12 @@ export default function App(): React.ReactElement {
         <CommandBar
           keyboardOffset={keyboardOffset}
           keyboardVisible={keyboardVisible}
-          progress={commandProgress}
-          visible={commandBarVisible}
           onArrowDown={() => sendTerminalKey("\u001b[B")}
           onArrowUp={() => sendTerminalKey("\u001b[A")}
           onControl={() => sendTerminalKey("\u0003")}
-          onKeyboard={toggleTerminalKeyboard}
+          onTab={() => sendTerminalKey("\t")}
+          onInput={sendTerminalInput}
           onMenu={() => setShowSwitcher((value) => !value)}
-          onToggle={() => setCommandBarVisible((value) => !value)}
         />
 
         <ExpoBottomSheet
@@ -715,84 +694,120 @@ function WindowNode({
 function CommandBar({
   keyboardOffset,
   keyboardVisible,
-  progress,
-  visible,
   onArrowDown,
   onArrowUp,
   onControl,
-  onKeyboard,
-  onMenu,
-  onToggle
+  onTab,
+  onInput,
+  onMenu
 }: {
   keyboardOffset: CommandProgress;
   keyboardVisible: boolean;
-  progress: CommandProgress;
-  visible: boolean;
   onArrowDown(): void;
   onArrowUp(): void;
   onControl(): void;
-  onKeyboard(): void;
+  onTab(): void;
+  onInput(data: string): void;
   onMenu(): void;
-  onToggle(): void;
 }): React.ReactElement {
   const keyboardTranslateY = Animated.multiply(keyboardOffset, -1);
-  const barTranslateY = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [COMMAND_BAR_HEIGHT + 10, 0]
-  });
-  const toggleOpacity = progress.interpolate({
-    inputRange: [0, 0.72, 1],
-    outputRange: [1, 0, 0]
-  });
-  const toggleTranslateY = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, COMMAND_TOGGLE_HEIGHT + 8]
-  });
-  const toggleScale = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 0.9]
-  });
 
   return (
-    <>
-      <Animated.View
-        pointerEvents={visible ? "auto" : "none"}
-        style={[
-          styles.commandBar,
-          {
-            opacity: progress,
-            transform: [{ translateY: keyboardTranslateY }, { translateY: barTranslateY }]
-          }
-        ]}
-      >
-        <CommandIconButton icon={Menu} iosSymbol="line.3.horizontal" label="Sessions" onPress={onMenu} />
-        <View style={styles.commandDivider} />
-        <CommandTextButton label="Send Ctrl-C" text="Ctrl" onPress={onControl} />
-        <CommandIconButton icon={ArrowUp} iosSymbol="arrow.up" label="Arrow up" onPress={onArrowUp} />
-        <CommandIconButton icon={ArrowDown} iosSymbol="arrow.down" label="Arrow down" onPress={onArrowDown} />
-        <CommandIconButton
-          active={keyboardVisible}
-          icon={KeyboardIcon}
-          iosSymbol="keyboard"
-          label={keyboardVisible ? "Hide keyboard" : "Show keyboard"}
-          onPress={onKeyboard}
-        />
-        <View style={styles.commandSpacer} />
-        <CommandIconButton icon={ChevronDown} iosSymbol="chevron.down" label="Hide command bar" onPress={onToggle} />
-      </Animated.View>
-      <Animated.View
-        pointerEvents={visible ? "none" : "auto"}
-        style={[
-          styles.commandBarCollapsed,
-          {
-            opacity: toggleOpacity,
-            transform: [{ translateY: keyboardTranslateY }, { translateY: toggleTranslateY }, { scale: toggleScale }]
-          }
-        ]}
-      >
-        <CommandIconButton icon={ChevronUp} iosSymbol="chevron.up" label="Show command bar" onPress={onToggle} />
-      </Animated.View>
-    </>
+    <Animated.View
+      style={[
+        styles.commandBar,
+        {
+          transform: [{ translateY: keyboardTranslateY }]
+        }
+      ]}
+    >
+      <CommandIconButton icon={Menu} iosSymbol="line.3.horizontal" label="Sessions" onPress={onMenu} />
+      <View style={styles.commandDivider} />
+      <CommandTextButton label="Send Ctrl-C" text="Ctrl" onPress={onControl} />
+      <CommandTextButton label="Send Tab" text="Tab" onPress={onTab} />
+      <CommandIconButton icon={ArrowUp} iosSymbol="arrow.up" label="Arrow up" onPress={onArrowUp} />
+      <CommandIconButton icon={ArrowDown} iosSymbol="arrow.down" label="Arrow down" onPress={onArrowDown} />
+      <CommandKeyboardButton
+        active={keyboardVisible}
+        label="Keyboard input"
+        onInput={onInput}
+      />
+      <View style={styles.commandSpacer} />
+    </Animated.View>
+  );
+}
+
+function CommandKeyboardButton({
+  active,
+  label,
+  onInput
+}: {
+  active: boolean;
+  label: string;
+  onInput(data: string): void;
+}): React.ReactElement {
+  const inputRef = useRef<NativeTextInput>(null);
+
+  const resetInput = useCallback(() => {
+    inputRef.current?.setNativeProps({
+      selection: COMMAND_KEYBOARD_PROXY_SELECTION,
+      text: COMMAND_KEYBOARD_PROXY_VALUE
+    });
+  }, []);
+
+  const focusInput = useCallback(() => {
+    resetInput();
+    inputRef.current?.focus();
+    requestAnimationFrame(() => {
+      resetInput();
+      inputRef.current?.focus();
+    });
+  }, [resetInput]);
+
+  const handleChangeText = useCallback((nextValue: string) => {
+    if (nextValue === COMMAND_KEYBOARD_PROXY_VALUE) {
+      return;
+    }
+
+    const rawInput = nextValue.length === 0
+      ? "\u007f"
+      : nextValue.startsWith(COMMAND_KEYBOARD_PROXY_VALUE)
+        ? nextValue.slice(COMMAND_KEYBOARD_PROXY_VALUE.length)
+        : nextValue;
+    onInput(rawInput.replace(/\n/g, "\r"));
+    resetInput();
+  }, [onInput, resetInput]);
+
+  return (
+    <Pressable
+      accessibilityLabel={label}
+      onPress={focusInput}
+      onPressIn={focusInput}
+      onTouchStart={focusInput}
+      style={styles.commandKeyboardButton}
+    >
+      <AdaptiveIcon fallback={KeyboardIcon} iosSymbol="keyboard" color={active ? palette.accent : palette.text} size={18} />
+      <NativeTextInput
+        ref={inputRef}
+        autoCapitalize="none"
+        autoComplete="off"
+        autoCorrect={false}
+        blurOnSubmit={false}
+        caretHidden
+        contextMenuHidden
+        defaultValue={COMMAND_KEYBOARD_PROXY_VALUE}
+        keyboardAppearance="dark"
+        multiline
+        onChangeText={handleChangeText}
+        onFocus={resetInput}
+        onPressIn={focusInput}
+        onTouchStart={focusInput}
+        selection={COMMAND_KEYBOARD_PROXY_SELECTION}
+        showSoftInputOnFocus
+        spellCheck={false}
+        style={styles.commandKeyboardInput}
+      />
+    </Pressable>
   );
 }
 
@@ -1410,22 +1425,36 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 35
   },
-  commandBarCollapsed: {
-    alignItems: "center",
-    bottom: 8,
-    height: 40,
-    justifyContent: "center",
-    position: "absolute",
-    right: 10,
-    width: 40,
-    zIndex: 35
-  },
   commandButton: {
     alignItems: "center",
     height: 36,
     justifyContent: "center",
     minWidth: 38,
     paddingHorizontal: 10
+  },
+  commandKeyboardButton: {
+    alignItems: "center",
+    height: 36,
+    justifyContent: "center",
+    minWidth: 38,
+    paddingHorizontal: 10,
+    position: "relative"
+  },
+  commandKeyboardInput: {
+    backgroundColor: "transparent",
+    bottom: 0,
+    color: "transparent",
+    fontSize: 16,
+    height: 36,
+    left: 0,
+    lineHeight: 20,
+    opacity: 0.01,
+    padding: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+    width: 38,
+    zIndex: 2
   },
   commandButtonText: {
     color: palette.text,

@@ -1,6 +1,13 @@
 import { FitAddon, Terminal, init } from "ghostty-web";
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { TerminalServerMessage } from "@remux/protocol";
+import {
+  TERMINAL_FONT_FACE,
+  TERMINAL_FONT_FAMILY,
+  TERMINAL_TOP_PADDING,
+  resolveTerminalFontUri,
+  terminalFontFaceCss
+} from "./terminal-font";
 import type { TerminalPaneHandle, TerminalPaneProps } from "./terminal-types";
 
 const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane(
@@ -22,6 +29,9 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       sendSocket(socketRef.current, { type: "input", data });
       terminalRef.current?.focus();
     },
+    sendInput(data: string) {
+      sendSocket(socketRef.current, { type: "input", data });
+    },
     focusKeyboard() {
       terminalRef.current?.focus();
     },
@@ -32,8 +42,9 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
 
   useEffect(() => {
     let disposed = false;
+    const removeTerminalFontFace = installTerminalFontFace();
 
-    void init().then(() => {
+    void loadTerminalFont().then(() => init()).then(() => {
       if (disposed || !containerRef.current) {
         return;
       }
@@ -41,7 +52,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       const terminal = new Terminal({
         cursorBlink: true,
         convertEol: true,
-        fontFamily: '"SFMono-Regular", "Cascadia Code", "Menlo", monospace',
+        fontFamily: TERMINAL_FONT_FAMILY,
         fontSize: 13,
         theme: {
           background: "#0d1110",
@@ -77,6 +88,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       terminalRef.current?.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
+      removeTerminalFontFace();
     };
   }, []);
 
@@ -166,11 +178,43 @@ function sendSocket(socket: WebSocket | null, payload: unknown): void {
   }
 }
 
+function installTerminalFontFace(): () => void {
+  const fontUri = resolveTerminalFontUri();
+  const cssText = terminalFontFaceCss(fontUri);
+  if (!cssText || typeof document === "undefined") {
+    return () => undefined;
+  }
+
+  const style = document.createElement("style");
+  style.dataset.remuxTerminalFont = TERMINAL_FONT_FACE;
+  style.textContent = cssText;
+  document.head.appendChild(style);
+
+  return () => {
+    style.remove();
+  };
+}
+
+async function loadTerminalFont(): Promise<void> {
+  if (typeof document === "undefined" || !document.fonts) {
+    return;
+  }
+
+  try {
+    await document.fonts.load(`13px "${TERMINAL_FONT_FACE}"`);
+    await document.fonts.ready;
+  } catch {
+    // The terminal still has a monospace fallback if the custom font cannot load.
+  }
+}
+
 const styles: Record<string, React.CSSProperties> = {
   shell: {
     backgroundColor: "#0d1110",
+    boxSizing: "border-box",
     flex: 1,
     minHeight: 0,
+    paddingTop: TERMINAL_TOP_PADDING,
     position: "relative",
     width: "100%"
   },
