@@ -1,5 +1,10 @@
 import { RemuxClient } from "@remux/api-client";
-import { BottomSheet as ExpoBottomSheet, Host as ExpoHost, Icon as ExpoIcon, RNHostView as ExpoRNHostView } from "@expo/ui";
+import {
+  BottomSheet as ExpoBottomSheet,
+  Host as ExpoHost,
+  Icon as ExpoIcon,
+  RNHostView as ExpoRNHostView
+} from "@expo/ui";
 import { presentationBackground } from "@expo/ui/swift-ui/modifiers";
 import type { TmuxPane, TmuxSession, TmuxTree, TmuxWindow } from "@remux/protocol";
 import {
@@ -7,6 +12,7 @@ import {
   ArrowUp,
   ChevronRight,
   Edit3,
+  Home,
   Keyboard as KeyboardIcon,
   Menu,
   Plus,
@@ -33,7 +39,7 @@ import {
   View
 } from "./src/rn";
 import TerminalPane from "./src/TerminalPane";
-import { loadConnection, saveConnection, type SavedConnection } from "./src/storage";
+import { deleteConnection, loadConnections, saveConnection, type SavedConnection } from "./src/storage";
 import type { TerminalPaneHandle } from "./src/terminal-types";
 
 type IconType = React.ComponentType<{ color?: string; size?: number; strokeWidth?: number }>;
@@ -42,7 +48,11 @@ type RenameTarget = { kind: "session" | "window"; id: string; name: string } | n
 
 const ENV_SERVER_URL =
   typeof process !== "undefined" ? process.env.EXPO_PUBLIC_REMUX_SERVER_URL?.trim() : undefined;
-const DEFAULT_SERVER_URL = ENV_SERVER_URL || (Platform.OS === "android" ? "http://10.0.2.2:8787" : "http://127.0.0.1:8787");
+const DEFAULT_REMUX_PORT = "14441";
+const DEFAULT_SERVER_FIELDS = readDefaultServerFields();
+const DEFAULT_SETUP_HOST = DEFAULT_SERVER_FIELDS.host;
+const DEFAULT_SETUP_PORT = DEFAULT_SERVER_FIELDS.port;
+const NEW_CONNECTION_ID = "__new_connection__";
 const COMMAND_BAR_HEIGHT = 52;
 const COMMAND_KEYBOARD_PROXY_VALUE = " ";
 const COMMAND_KEYBOARD_PROXY_SELECTION = {
@@ -58,13 +68,16 @@ export default function App(): React.ReactElement {
   const terminalRef = useRef<TerminalPaneHandle>(null);
   const keyboardOffset = useRef(new Animated.Value(0)).current;
   const pendingRenameTargetRef = useRef<RenameTarget>(null);
+  const [connections, setConnections] = useState<SavedConnection[]>([]);
   const [connection, setConnection] = useState<SavedConnection | null>(null);
-  const [setupBaseUrl, setSetupBaseUrl] = useState(DEFAULT_SERVER_URL);
-  const [setupToken, setSetupToken] = useState("");
+  const [setupLabel, setSetupLabel] = useState("");
+  const [setupHost, setSetupHost] = useState(DEFAULT_SETUP_HOST);
+  const [setupPort, setSetupPort] = useState(DEFAULT_SETUP_PORT);
   const [tree, setTree] = useState<TmuxTree | null>(null);
   const [selectedPaneId, setSelectedPaneId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [connectingConnectionId, setConnectingConnectionId] = useState<string | null>(null);
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -97,12 +110,8 @@ export default function App(): React.ReactElement {
   }, [refreshTree]);
 
   useEffect(() => {
-    void loadConnection().then((saved) => {
-      if (saved) {
-        setConnection(saved);
-        setSetupBaseUrl(saved.baseUrl);
-        setSetupToken(saved.token);
-      }
+    void loadConnections().then((saved) => {
+      setConnections(saved);
       setLoading(false);
     });
   }, []);
@@ -182,28 +191,61 @@ export default function App(): React.ReactElement {
   }, [keyboardOffset]);
 
   async function connect(): Promise<void> {
-    const nextConnection = {
-      baseUrl: setupBaseUrl.trim().replace(/\/+$/, ""),
-      token: setupToken.trim()
-    };
-
-    if (!nextConnection.baseUrl) {
-      setError("Server URL is required.");
+    const nextConnection = buildConnectionFromFields(setupLabel, setupHost, setupPort);
+    if (typeof nextConnection === "string") {
+      setError(nextConnection);
       return;
     }
 
+    await connectToConnection(nextConnection, { save: true });
+  }
+
+  async function connectToSavedConnection(savedConnection: SavedConnection): Promise<void> {
+    await connectToConnection(savedConnection, { save: false });
+  }
+
+  async function connectToConnection(nextConnection: SavedConnection, options: { save: boolean }): Promise<void> {
+    let connected = false;
     setLoading(true);
     setError(null);
+    setConnectingConnectionId(options.save ? NEW_CONNECTION_ID : nextConnection.id);
     try {
       const nextClient = new RemuxClient(nextConnection);
       await nextClient.health();
-      await saveConnection(nextConnection);
+      if (options.save) {
+        const nextConnections = await saveConnection(nextConnection, connections);
+        setConnections(nextConnections);
+        setSetupLabel("");
+        setSetupHost(nextConnection.host);
+        setSetupPort(nextConnection.port);
+      }
       setConnection(nextConnection);
+      connected = true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Connection failed");
     } finally {
-      setLoading(false);
+      setConnectingConnectionId(null);
+      if (!connected) {
+        setLoading(false);
+      }
     }
+  }
+
+  async function removeSavedConnection(connectionId: string): Promise<void> {
+    const nextConnections = await deleteConnection(connectionId, connections);
+    setConnections(nextConnections);
+  }
+
+  function returnHome(): void {
+    terminalRef.current?.dismissKeyboard();
+    NativeKeyboard.dismiss();
+    setShowSwitcher(false);
+    setRenameTarget(null);
+    setConnection(null);
+    setTree(null);
+    setSelectedPaneId(null);
+    setError(null);
+    setLoading(false);
   }
 
   async function runTreeAction(action: () => Promise<TmuxTree>, selectPane?: string | null): Promise<void> {
@@ -312,44 +354,21 @@ export default function App(): React.ReactElement {
 
   if (!connection) {
     return (
-      <SafeAreaView style={styles.root}>
-        <StatusBar barStyle="light-content" />
-        <View style={styles.setup}>
-          <View style={styles.setupHeader}>
-            <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={palette.accent} size={28} />
-            <Text style={styles.brand}>Remux</Text>
-            <Text style={styles.muted}>Connect to a tmux host reachable through your tunnel or VPN.</Text>
-          </View>
-          <View style={styles.form}>
-            <Text style={styles.label}>Server URL</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              onChangeText={setSetupBaseUrl}
-              placeholder="http://127.0.0.1:8787"
-              placeholderTextColor={palette.muted}
-              style={styles.input}
-              value={setupBaseUrl}
-            />
-            <Text style={styles.label}>Bearer token (optional)</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              onChangeText={setSetupToken}
-              placeholder="Blank for local dev"
-              placeholderTextColor={palette.muted}
-              secureTextEntry
-              style={styles.input}
-              value={setupToken}
-            />
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-            <Pressable disabled={loading} onPress={() => void connect()} style={styles.primaryButton}>
-              {loading ? <ActivityIndicator color={palette.bg} /> : <Text style={styles.primaryButtonText}>Connect</Text>}
-            </Pressable>
-          </View>
-        </View>
-      </SafeAreaView>
+      <WelcomeScreen
+        connectingConnectionId={connectingConnectionId}
+        connections={connections}
+        error={error}
+        loading={loading}
+        setupHost={setupHost}
+        setupLabel={setupLabel}
+        setupPort={setupPort}
+        onConnect={() => void connect()}
+        onConnectSaved={(savedConnection) => void connectToSavedConnection(savedConnection)}
+        onDeleteSaved={(connectionId) => void removeSavedConnection(connectionId)}
+        onSetupHostChange={setSetupHost}
+        onSetupLabelChange={setSetupLabel}
+        onSetupPortChange={setSetupPort}
+      />
     );
   }
 
@@ -433,6 +452,7 @@ export default function App(): React.ReactElement {
               <View style={styles.sheetHeader}>
                 <Text style={styles.sheetTitle}>Sessions</Text>
                 <View style={styles.sheetHeaderActions}>
+                  <IconButton icon={Home} iosSymbol="house" label="Home" onPress={returnHome} />
                   <IconButton icon={Plus} iosSymbol="plus" label="New session" onPress={() => void createSession()} />
                 </View>
               </View>
@@ -459,6 +479,160 @@ export default function App(): React.ReactElement {
         ) : null}
       </View>
     </SafeAreaView>
+  );
+}
+
+function WelcomeScreen({
+  connectingConnectionId,
+  connections,
+  error,
+  loading,
+  setupHost,
+  setupLabel,
+  setupPort,
+  onConnect,
+  onConnectSaved,
+  onDeleteSaved,
+  onSetupHostChange,
+  onSetupLabelChange,
+  onSetupPortChange
+}: {
+  connectingConnectionId: string | null;
+  connections: SavedConnection[];
+  error: string | null;
+  loading: boolean;
+  setupHost: string;
+  setupLabel: string;
+  setupPort: string;
+  onConnect(): void;
+  onConnectSaved(connection: SavedConnection): void;
+  onDeleteSaved(connectionId: string): void;
+  onSetupHostChange(value: string): void;
+  onSetupLabelChange(value: string): void;
+  onSetupPortChange(value: string): void;
+}): React.ReactElement {
+  const busy = loading || connectingConnectionId !== null;
+  const formConnecting = connectingConnectionId === NEW_CONNECTION_ID;
+
+  return (
+    <SafeAreaView style={styles.root}>
+      <StatusBar barStyle="light-content" />
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        style={styles.setupScroll}
+        contentContainerStyle={styles.setupScrollContent}
+      >
+        <View style={styles.setup}>
+          <View style={styles.setupHeader}>
+            <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={palette.accent} size={28} />
+            <Text style={styles.brand}>Remux</Text>
+            <Text style={styles.muted}>Connect to a tmux host reachable through your tunnel or VPN.</Text>
+          </View>
+
+          <View style={styles.savedServers}>
+            <View style={styles.setupSectionHeader}>
+              <Text style={styles.setupSectionTitle}>Servers</Text>
+              {loading && !connectingConnectionId ? <ActivityIndicator color={palette.accent} /> : null}
+            </View>
+            {connections.length > 0 ? (
+              <View style={styles.savedServerList}>
+                {connections.map((savedConnection) => (
+                  <SavedServerRow
+                    key={savedConnection.id}
+                    connection={savedConnection}
+                    connecting={connectingConnectionId === savedConnection.id}
+                    disabled={busy}
+                    onConnect={() => onConnectSaved(savedConnection)}
+                    onDelete={() => onDeleteSaved(savedConnection.id)}
+                  />
+                ))}
+              </View>
+            ) : (
+              <View style={styles.emptyServerState}>
+                <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={palette.faint} size={22} />
+                <Text style={styles.emptyServerText}>No saved servers yet.</Text>
+              </View>
+            )}
+          </View>
+
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+          <View style={styles.form}>
+            <Text style={styles.setupSectionTitle}>Add server</Text>
+            <Text style={styles.label}>Label (optional)</Text>
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={onSetupLabelChange}
+              placeholder="MacBook"
+              placeholderTextColor={palette.muted}
+              style={styles.input}
+              value={setupLabel}
+            />
+            <Text style={styles.label}>Host</Text>
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              onChangeText={onSetupHostChange}
+              placeholder="100.x.y.z"
+              placeholderTextColor={palette.muted}
+              style={styles.input}
+              value={setupHost}
+            />
+            <Text style={styles.label}>Port</Text>
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="number-pad"
+              onChangeText={onSetupPortChange}
+              placeholder={DEFAULT_REMUX_PORT}
+              placeholderTextColor={palette.muted}
+              style={styles.input}
+              value={setupPort}
+            />
+            <Pressable disabled={busy} onPress={onConnect} style={[styles.primaryButton, busy ? styles.primaryButtonDisabled : null]}>
+              {formConnecting ? <ActivityIndicator color={palette.bg} /> : <Text style={styles.primaryButtonText}>Connect</Text>}
+            </Pressable>
+          </View>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function SavedServerRow({
+  connection,
+  connecting,
+  disabled,
+  onConnect,
+  onDelete
+}: {
+  connection: SavedConnection;
+  connecting: boolean;
+  disabled: boolean;
+  onConnect(): void;
+  onDelete(): void;
+}): React.ReactElement {
+  return (
+    <View style={styles.savedServerRow}>
+      <Pressable disabled={disabled} onPress={onConnect} style={styles.savedServerSelect}>
+        <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={connecting ? palette.accent : palette.muted} size={17} />
+        <View style={styles.savedServerTextGroup}>
+          <Text numberOfLines={1} style={styles.savedServerLabel}>{connection.label}</Text>
+          <Text numberOfLines={1} style={styles.savedServerAddress}>{connection.host}:{connection.port}</Text>
+        </View>
+        {connecting ? <ActivityIndicator color={palette.accent} /> : <Text style={styles.savedServerAction}>Connect</Text>}
+      </Pressable>
+      <TouchableOpacity
+        accessibilityLabel={`Delete saved server ${connection.label}`}
+        disabled={disabled}
+        onPress={onDelete}
+        style={styles.savedServerDelete}
+      >
+        <AdaptiveIcon fallback={Trash2} iosSymbol="trash" color={palette.faint} size={15} />
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -953,6 +1127,91 @@ function IconButton({
   );
 }
 
+function readDefaultServerFields(): { host: string; port: string } {
+  const envFields = ENV_SERVER_URL ? splitHostAndInlinePort(ENV_SERVER_URL) : null;
+  if (envFields?.host) {
+    return {
+      host: envFields.host,
+      port: envFields.port ?? DEFAULT_REMUX_PORT
+    };
+  }
+
+  return {
+    host: Platform.OS === "android" ? "10.0.2.2" : "127.0.0.1",
+    port: DEFAULT_REMUX_PORT
+  };
+}
+
+function buildConnectionFromFields(labelInput: string, hostInput: string, portInput: string): SavedConnection | string {
+  const parsedHost = splitHostAndInlinePort(hostInput);
+  const host = parsedHost?.host.trim() ?? "";
+  if (!host) {
+    return "Host is required.";
+  }
+
+  const typedPort = portInput.trim();
+  const port = parsedHost?.port && (!typedPort || typedPort === DEFAULT_REMUX_PORT)
+    ? parsedHost.port
+    : typedPort || DEFAULT_REMUX_PORT;
+  if (!isValidPort(port)) {
+    return "Port must be between 1 and 65535.";
+  }
+
+  const label = labelInput.trim() || host;
+  return {
+    id: `${host}:${port}`,
+    label,
+    host,
+    port,
+    baseUrl: `http://${formatHostForUrl(host)}:${port}`,
+    token: ""
+  };
+}
+
+function splitHostAndInlinePort(value: string): { host: string; port?: string } | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.includes("://")) {
+    try {
+      const url = new URL(trimmed);
+      return {
+        host: url.hostname,
+        port: url.port || undefined
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  const withoutPath = trimmed.split("/")[0] ?? "";
+  const ipv6Match = withoutPath.match(/^\[([^\]]+)](?::(\d+))?$/);
+  if (ipv6Match) {
+    return {
+      host: ipv6Match[1],
+      port: ipv6Match[2]
+    };
+  }
+
+  const [host, inlinePort, ...rest] = withoutPath.split(":");
+  if (host && inlinePort && rest.length === 0 && /^\d+$/.test(inlinePort)) {
+    return { host, port: inlinePort };
+  }
+
+  return { host: withoutPath };
+}
+
+function isValidPort(port: string): boolean {
+  const value = Number(port);
+  return Number.isInteger(value) && value > 0 && value <= 65535;
+}
+
+function formatHostForUrl(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
 function findSelectedTarget(tree: TmuxTree | null, paneId: string | null): {
   session: TmuxSession;
   window: TmuxWindow;
@@ -1013,11 +1272,17 @@ const styles = StyleSheet.create({
   },
   setup: {
     alignSelf: "center",
-    flex: 1,
     justifyContent: "center",
     maxWidth: 460,
     padding: 24,
     width: "100%"
+  },
+  setupScroll: {
+    flex: 1
+  },
+  setupScrollContent: {
+    flexGrow: 1,
+    justifyContent: "center"
   },
   setupHeader: {
     gap: 12,
@@ -1035,7 +1300,80 @@ const styles = StyleSheet.create({
     lineHeight: 20
   },
   form: {
-    gap: 10
+    gap: 9,
+    marginTop: 28
+  },
+  setupSectionHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 10
+  },
+  setupSectionTitle: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: "800"
+  },
+  savedServers: {
+    gap: 8
+  },
+  savedServerList: {
+    gap: 8
+  },
+  savedServerRow: {
+    alignItems: "center",
+    backgroundColor: palette.panel,
+    flexDirection: "row",
+    minHeight: 58,
+    overflow: "hidden"
+  },
+  savedServerSelect: {
+    alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    gap: 10,
+    minHeight: 58,
+    minWidth: 0,
+    paddingLeft: 12,
+    paddingRight: 8
+  },
+  savedServerTextGroup: {
+    flex: 1,
+    minWidth: 0
+  },
+  savedServerLabel: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: "700"
+  },
+  savedServerAddress: {
+    color: palette.muted,
+    fontSize: 12,
+    marginTop: 2
+  },
+  savedServerAction: {
+    color: palette.accent,
+    flexShrink: 0,
+    fontSize: 12,
+    fontWeight: "800",
+    textTransform: "uppercase"
+  },
+  savedServerDelete: {
+    alignItems: "center",
+    height: 58,
+    justifyContent: "center",
+    width: 48
+  },
+  emptyServerState: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+    minHeight: 58,
+    paddingHorizontal: 4
+  },
+  emptyServerText: {
+    color: palette.muted,
+    fontSize: 14
   },
   label: {
     color: palette.muted,
@@ -1044,22 +1382,27 @@ const styles = StyleSheet.create({
     textTransform: "uppercase"
   },
   input: {
-    backgroundColor: palette.panel,
-    borderColor: palette.line,
+    backgroundColor: "rgba(216, 229, 222, 0.07)",
+    borderColor: "rgba(216, 229, 222, 0.1)",
+    borderRadius: 14,
     borderWidth: 1,
     color: palette.text,
     fontSize: 15,
-    minHeight: 46,
-    paddingHorizontal: 14,
-    paddingVertical: 10
+    minHeight: 50,
+    paddingHorizontal: 16,
+    paddingVertical: 12
   },
   primaryButton: {
     alignItems: "center",
     backgroundColor: palette.accent,
+    borderRadius: 14,
     justifyContent: "center",
     marginTop: 10,
-    minHeight: 48,
+    minHeight: 50,
     paddingHorizontal: 18
+  },
+  primaryButtonDisabled: {
+    opacity: 0.62
   },
   primaryButtonCompact: {
     alignItems: "center",

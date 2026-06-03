@@ -74,14 +74,15 @@ Start Remux on all interfaces with a token:
 ```bash
 ~/remux/remux-server.mjs \
   --host 0.0.0.0 \
-  --port 8787 \
+  --port 14441 \
   --token "change-this-token"
 ```
 
-The server URL for the Android app will be:
+Use these values in the app:
 
 ```text
-http://SERVER_IP_OR_TAILSCALE_IP:8787
+Host: SERVER_IP_OR_TAILSCALE_IP
+Port: 14441
 ```
 
 If you are testing only on the same machine, you can disable auth:
@@ -98,7 +99,7 @@ The standalone CLI accepts these options:
 
 ```text
 --host <host>          Host to bind. Default: 127.0.0.1
---port <port>          Port to listen on. Default: 8787
+--port <port>          Port to listen on. Default: 14441
 --token <token>        Bearer token required by clients.
 --no-auth              Disable bearer auth. Only use behind a trusted tunnel.
 --db-path <path>       Metadata database path. Default: ~/.remux/remux.db
@@ -120,7 +121,7 @@ Example with environment variables:
 
 ```bash
 REMUX_HOST=0.0.0.0 \
-REMUX_PORT=8787 \
+REMUX_PORT=14441 \
 REMUX_TOKEN=change-this-token \
 ~/remux/remux-server.mjs
 ```
@@ -140,7 +141,7 @@ Type=simple
 User=YOUR_LINUX_USER
 WorkingDirectory=/home/YOUR_LINUX_USER
 Environment=REMUX_HOST=0.0.0.0
-Environment=REMUX_PORT=8787
+Environment=REMUX_PORT=14441
 Environment=REMUX_TOKEN=change-this-token
 ExecStart=/home/YOUR_LINUX_USER/remux/remux-server.mjs
 Restart=always
@@ -178,15 +179,18 @@ Or copy it to the phone and open it with Android's package installer.
 
 In the Remux app:
 
-1. Set **Server URL** to `http://SERVER_IP_OR_TAILSCALE_IP:8787`.
-2. Enter the bearer token from `--token` or `REMUX_TOKEN`.
-3. Leave the token blank only when the server is running with `--no-auth`.
+1. Set **Label** if you want a friendly server name.
+2. Set **Host** to `SERVER_IP_OR_TAILSCALE_IP`.
+3. Leave **Port** as `14441` unless you changed the server port.
 4. Tap **Connect**.
+
+The current mobile client uses blank auth. Keep the server behind a trusted tunnel and leave `REMUX_TOKEN` blank or start with `--no-auth`.
 
 For Tailscale, use the server's Tailscale IP, for example:
 
 ```text
-http://100.x.y.z:8787
+Host: 100.x.y.z
+Port: 14441
 ```
 
 The Android app enables cleartext HTTP for private-network/VPN use. For public internet exposure, put Remux behind HTTPS and require a strong token.
@@ -199,15 +203,15 @@ npm run dev:server
 npm run dev:client
 ```
 
-The development server defaults to `127.0.0.1:8787`, controls the local tmux socket, and leaves bearer auth disabled when `REMUX_TOKEN` is blank.
+The development server defaults to `127.0.0.1:14441`, controls the local tmux socket, and leaves bearer auth disabled when `REMUX_TOKEN` is blank.
 
-Expo serves web, iOS, and Android from `apps/client`. The Android emulator uses `http://10.0.2.2:8787` by default so it can reach the host machine. Override the startup URL with:
+Expo serves web, iOS, and Android from `apps/client`. The Android emulator uses host `10.0.2.2` and port `14441` by default so it can reach the host machine. Override the startup URL with:
 
 ```bash
 EXPO_PUBLIC_REMUX_SERVER_URL=http://10.0.2.2:8800 npm --workspace @remux/client run android
 ```
 
-Leave the token field blank when the server is running with blank `REMUX_TOKEN`.
+Use a blank `REMUX_TOKEN` while developing against the current mobile client.
 
 ## Build Commands
 

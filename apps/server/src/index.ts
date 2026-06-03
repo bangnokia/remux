@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
-import { readServerConfig } from "@remux/config";
+import { DEFAULT_REMUX_PORT, readServerConfig } from "@remux/config";
 import { initializeAuth } from "./auth.js";
 import { MetadataStore } from "./metadata.js";
 import { registerRoutes } from "./routes.js";
@@ -122,7 +122,7 @@ Usage:
 
 Options:
   --host <host>          Host to bind. Default: 127.0.0.1
-  --port <port>          Port to listen on. Default: 8787
+  --port <port>          Port to listen on. Default: ${DEFAULT_REMUX_PORT}
   --token <token>        Bearer token required by clients.
   --no-auth              Disable bearer auth. Only use behind a trusted tunnel.
   --db-path <path>       Metadata database path. Default: ~/.remux/remux.db
