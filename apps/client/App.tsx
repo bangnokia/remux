@@ -511,8 +511,18 @@ function WelcomeScreen({
   onSetupLabelChange(value: string): void;
   onSetupPortChange(value: string): void;
 }): React.ReactElement {
+  const { width } = useWindowDimensions();
   const busy = loading || connectingConnectionId !== null;
   const formConnecting = connectingConnectionId === NEW_CONNECTION_ID;
+  const hasSavedServers = connections.length > 0;
+  const sheetWidth = Math.max(0, width - 32);
+  const [showAddServerSheet, setShowAddServerSheet] = useState(!hasSavedServers);
+
+  useEffect(() => {
+    if (!hasSavedServers) {
+      setShowAddServerSheet(true);
+    }
+  }, [hasSavedServers]);
 
   return (
     <SafeAreaView style={styles.root}>
@@ -532,9 +542,16 @@ function WelcomeScreen({
           <View style={styles.savedServers}>
             <View style={styles.setupSectionHeader}>
               <Text style={styles.setupSectionTitle}>Servers</Text>
-              {loading && !connectingConnectionId ? <ActivityIndicator color={palette.accent} /> : null}
+              <View style={styles.setupSectionActions}>
+                {loading && !connectingConnectionId ? <ActivityIndicator color={palette.accent} /> : null}
+                {hasSavedServers ? (
+                  <Pressable disabled={busy} onPress={() => setShowAddServerSheet(true)} style={styles.textButton}>
+                    <Text style={[styles.textButtonText, busy ? styles.textButtonTextDisabled : null]}>Add server</Text>
+                  </Pressable>
+                ) : null}
+              </View>
             </View>
-            {connections.length > 0 ? (
+            {hasSavedServers ? (
               <View style={styles.savedServerList}>
                 {connections.map((savedConnection) => (
                   <SavedServerRow
@@ -551,53 +568,111 @@ function WelcomeScreen({
               <View style={styles.emptyServerState}>
                 <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={palette.faint} size={22} />
                 <Text style={styles.emptyServerText}>No saved servers yet.</Text>
+                <Pressable disabled={busy} onPress={() => setShowAddServerSheet(true)} style={styles.textButton}>
+                  <Text style={[styles.textButtonText, busy ? styles.textButtonTextDisabled : null]}>Add server</Text>
+                </Pressable>
               </View>
             )}
           </View>
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-          <View style={styles.form}>
-            <Text style={styles.setupSectionTitle}>Add server</Text>
-            <Text style={styles.label}>Label (optional)</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              onChangeText={onSetupLabelChange}
-              placeholder="MacBook"
-              placeholderTextColor={palette.muted}
-              style={styles.input}
-              value={setupLabel}
-            />
-            <Text style={styles.label}>Host</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              onChangeText={onSetupHostChange}
-              placeholder="100.x.y.z"
-              placeholderTextColor={palette.muted}
-              style={styles.input}
-              value={setupHost}
-            />
-            <Text style={styles.label}>Port</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="number-pad"
-              onChangeText={onSetupPortChange}
-              placeholder={DEFAULT_REMUX_PORT}
-              placeholderTextColor={palette.muted}
-              style={styles.input}
-              value={setupPort}
-            />
-            <Pressable disabled={busy} onPress={onConnect} style={[styles.primaryButton, busy ? styles.primaryButtonDisabled : null]}>
-              {formConnecting ? <ActivityIndicator color={palette.bg} /> : <Text style={styles.primaryButtonText}>Connect</Text>}
-            </Pressable>
-          </View>
         </View>
       </ScrollView>
+      <ExpoBottomSheet
+        isPresented={showAddServerSheet}
+        onDismiss={() => setShowAddServerSheet(false)}
+        showDragIndicator
+        snapPoints={[{ fraction: 0.58 }, "full"]}
+        modifiers={Platform.OS === "ios" ? [presentationBackground(palette.bg)] : undefined}
+      >
+        <ExpoRNHostView>
+          <View style={[styles.addServerSheetContent, { width: sheetWidth }]}>
+            <AddServerForm
+              busy={busy}
+              formConnecting={formConnecting}
+              setupHost={setupHost}
+              setupLabel={setupLabel}
+              setupPort={setupPort}
+              onCancel={hasSavedServers ? () => setShowAddServerSheet(false) : undefined}
+              onConnect={onConnect}
+              onSetupHostChange={onSetupHostChange}
+              onSetupLabelChange={onSetupLabelChange}
+              onSetupPortChange={onSetupPortChange}
+            />
+          </View>
+        </ExpoRNHostView>
+      </ExpoBottomSheet>
     </SafeAreaView>
+  );
+}
+
+function AddServerForm({
+  busy,
+  formConnecting,
+  setupHost,
+  setupLabel,
+  setupPort,
+  onCancel,
+  onConnect,
+  onSetupHostChange,
+  onSetupLabelChange,
+  onSetupPortChange
+}: {
+  busy: boolean;
+  formConnecting: boolean;
+  setupHost: string;
+  setupLabel: string;
+  setupPort: string;
+  onCancel?: () => void;
+  onConnect(): void;
+  onSetupHostChange(value: string): void;
+  onSetupLabelChange(value: string): void;
+  onSetupPortChange(value: string): void;
+}): React.ReactElement {
+  return (
+    <View style={styles.form}>
+      <Text style={styles.setupSectionTitle}>Add server</Text>
+      <Text style={styles.label}>Label (optional)</Text>
+      <TextInput
+        autoCapitalize="none"
+        autoCorrect={false}
+        onChangeText={onSetupLabelChange}
+        placeholder="MacBook"
+        placeholderTextColor={palette.muted}
+        style={styles.input}
+        value={setupLabel}
+      />
+      <Text style={styles.label}>Host</Text>
+      <TextInput
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+        onChangeText={onSetupHostChange}
+        placeholder="100.x.y.z"
+        placeholderTextColor={palette.muted}
+        style={styles.input}
+        value={setupHost}
+      />
+      <Text style={styles.label}>Port</Text>
+      <TextInput
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="number-pad"
+        onChangeText={onSetupPortChange}
+        placeholder={DEFAULT_REMUX_PORT}
+        placeholderTextColor={palette.muted}
+        style={styles.input}
+        value={setupPort}
+      />
+      <Pressable disabled={busy} onPress={onConnect} style={[styles.primaryButton, busy ? styles.primaryButtonDisabled : null]}>
+        {formConnecting ? <ActivityIndicator color={palette.bg} /> : <Text style={styles.primaryButtonText}>Connect</Text>}
+      </Pressable>
+      {onCancel ? (
+        <Pressable disabled={busy} onPress={onCancel} style={styles.cancelTextButton}>
+          <Text style={[styles.textButtonTextMuted, busy ? styles.textButtonTextDisabled : null]}>Cancel</Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -1300,8 +1375,7 @@ const styles = StyleSheet.create({
     lineHeight: 20
   },
   form: {
-    gap: 9,
-    marginTop: 28
+    gap: 9
   },
   setupSectionHeader: {
     alignItems: "center",
@@ -1309,10 +1383,37 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 10
   },
+  setupSectionActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10
+  },
   setupSectionTitle: {
     color: palette.text,
     fontSize: 13,
     fontWeight: "800"
+  },
+  textButton: {
+    minHeight: 30,
+    justifyContent: "center"
+  },
+  textButtonText: {
+    color: palette.accent,
+    fontSize: 13,
+    fontWeight: "800"
+  },
+  textButtonTextMuted: {
+    color: palette.muted,
+    fontSize: 13,
+    fontWeight: "700"
+  },
+  textButtonTextDisabled: {
+    opacity: 0.5
+  },
+  cancelTextButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 38
   },
   savedServers: {
     gap: 8
@@ -1372,6 +1473,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4
   },
   emptyServerText: {
+    flex: 1,
     color: palette.muted,
     fontSize: 14
   },
@@ -1581,6 +1683,13 @@ const styles = StyleSheet.create({
     minHeight: 420,
     paddingBottom: 18,
     paddingHorizontal: 0
+  },
+  addServerSheetContent: {
+    alignSelf: "stretch",
+    backgroundColor: palette.bg,
+    paddingBottom: 26,
+    paddingHorizontal: 2,
+    paddingTop: 2
   },
   sheetHeader: {
     alignItems: "center",
