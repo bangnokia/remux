@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
+import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from "react";
 import { TextInput as NativeTextInput } from "react-native";
 import { WebView } from "react-native-webview";
 import { StyleSheet, View } from "./rn";
@@ -17,7 +17,6 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   const webViewRef = useRef<WebView>(null);
   const keyboardInputRef = useRef<NativeTextInput>(null);
   const lastLayoutRef = useRef<{ width: number; height: number } | null>(null);
-  const [keyboardProxyValue, setKeyboardProxyValue] = useState(KEYBOARD_PROXY_VALUE);
   const html = useMemo(() => terminalHtml(wsUrl), [wsUrl]);
 
   const focusWebTerminal = useCallback(() => {
@@ -25,7 +24,6 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   }, []);
 
   const resetKeyboardProxy = useCallback(() => {
-    setKeyboardProxyValue(KEYBOARD_PROXY_VALUE);
     keyboardInputRef.current?.setNativeProps({
       selection: KEYBOARD_PROXY_SELECTION,
       text: KEYBOARD_PROXY_VALUE
@@ -106,7 +104,6 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       const message = JSON.parse(data) as { type: string; value?: string };
       if (message.type === "status") {
         onStatus(message.value ?? "");
-        focusWebTerminal();
       } else if (message.type === "treeChanged") {
         onTreeChanged();
       }
@@ -143,6 +140,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         blurOnSubmit={false}
         caretHidden
         contextMenuHidden
+        defaultValue={KEYBOARD_PROXY_VALUE}
         keyboardAppearance="dark"
         multiline
         onChangeText={handleKeyboardProxyChange}
@@ -150,7 +148,6 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         selection={KEYBOARD_PROXY_SELECTION}
         spellCheck={false}
         style={styles.keyboardProxy}
-        value={keyboardProxyValue}
       />
     </View>
   );
@@ -291,10 +288,15 @@ function terminalHtml(wsUrl: string): string {
       socket.onmessage = (event) => {
         const message = JSON.parse(event.data);
         if (message.type === 'snapshot') {
+          const hasNativeViewport = Boolean(nativeViewportWidth && nativeViewportHeight);
           term.reset();
-          term.resize(message.cols, message.rows);
+          if (!hasNativeViewport) {
+            term.resize(message.cols, message.rows);
+          }
           term.write(message.data);
-          scheduleFit();
+          if (!hasNativeViewport) {
+            scheduleFit();
+          }
         } else if (message.type === 'output') {
           term.write(message.data);
         } else if (message.type === 'treeChanged') {
@@ -345,8 +347,12 @@ function terminalHtml(wsUrl: string): string {
     function scheduleFit() {
       if (pendingViewportFit) clearTimeout(pendingViewportFit);
       pendingViewportFit = setTimeout(() => {
+        pendingViewportFit = undefined;
         window.remuxFit();
-        pendingViewportFit = setTimeout(window.remuxFit, 120);
+        pendingViewportFit = setTimeout(() => {
+          pendingViewportFit = undefined;
+          window.remuxFit();
+        }, 120);
       }, 0);
     }
 

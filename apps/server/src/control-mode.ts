@@ -353,7 +353,6 @@ function isTreeChangeNotification(line: string): boolean {
     line.startsWith("%window-add") ||
     line.startsWith("%window-close") ||
     line.startsWith("%window-renamed") ||
-    line.startsWith("%layout-change") ||
     line.startsWith("%window-pane-changed")
   );
 }
