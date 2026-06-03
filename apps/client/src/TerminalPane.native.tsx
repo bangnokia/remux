@@ -38,8 +38,8 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   }, [resetKeyboardProxy]);
 
   const focusTerminal = useCallback(() => {
-    focusKeyboardProxy();
     focusWebTerminal();
+    focusKeyboardProxy();
   }, [focusKeyboardProxy, focusWebTerminal]);
 
   const handleLayout = useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
@@ -116,7 +116,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   }
 
   return (
-    <View onLayout={handleLayout} onTouchStart={focusTerminal} style={styles.shell}>
+    <View onLayout={handleLayout} onTouchEnd={focusKeyboardProxy} onTouchStart={focusTerminal} style={styles.shell}>
       <WebView
         ref={webViewRef}
         originWhitelist={["*"]}
