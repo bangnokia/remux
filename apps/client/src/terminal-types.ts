@@ -1,5 +1,7 @@
 export interface TerminalPaneHandle {
+  dismissKeyboard(): void;
   fit(): void;
+  focusKeyboard(): void;
   send(data: string): void;
 }
 

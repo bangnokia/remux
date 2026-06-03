@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from "react";
-import { TextInput as NativeTextInput } from "react-native";
+import { Keyboard as NativeKeyboard, TextInput as NativeTextInput } from "react-native";
 import { WebView } from "react-native-webview";
 import { StyleSheet, View } from "./rn";
 import type { TerminalPaneHandle, TerminalPaneProps } from "./terminal-types";
@@ -89,14 +89,22 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   );
 
   useImperativeHandle(ref, () => ({
+    dismissKeyboard() {
+      keyboardInputRef.current?.blur();
+      NativeKeyboard.dismiss();
+      focusWebTerminal();
+    },
     send(data: string) {
       sendToTerminal(data);
       focusWebTerminal();
     },
+    focusKeyboard() {
+      focusTerminal();
+    },
     fit() {
       webViewRef.current?.injectJavaScript("window.remuxFit && window.remuxFit(); true;");
     }
-  }), [focusWebTerminal, sendToTerminal]);
+  }), [focusTerminal, focusWebTerminal, sendToTerminal]);
 
   function handleMessage(event: unknown): void {
     const data = readWebViewMessageData(event);

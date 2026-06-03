@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronUp,
   Edit3,
+  Keyboard as KeyboardIcon,
   Menu,
   Plus,
   Server,
@@ -16,7 +17,7 @@ import {
   Trash2,
 } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Animated, Easing } from "react-native";
+import { Animated, Easing, Keyboard as NativeKeyboard } from "react-native";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -54,6 +55,7 @@ export default function App(): React.ReactElement {
   const sheetWidth = Math.max(0, width - 32);
   const terminalRef = useRef<TerminalPaneHandle>(null);
   const commandProgress = useRef(new Animated.Value(1)).current;
+  const keyboardOffset = useRef(new Animated.Value(0)).current;
   const pendingRenameTargetRef = useRef<RenameTarget>(null);
   const [connection, setConnection] = useState<SavedConnection | null>(null);
   const [setupBaseUrl, setSetupBaseUrl] = useState(DEFAULT_SERVER_URL);
@@ -64,6 +66,7 @@ export default function App(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [commandBarVisible, setCommandBarVisible] = useState(true);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
 
   const client = useMemo(() => (connection ? new RemuxClient(connection) : null), [connection]);
@@ -151,6 +154,37 @@ export default function App(): React.ReactElement {
       useNativeDriver: true
     }).start();
   }, [commandBarVisible, commandProgress]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const showSubscription = NativeKeyboard.addListener(showEvent, (event) => {
+      const height = Math.max(0, event.endCoordinates?.height ?? 0);
+      setKeyboardVisible(true);
+      Animated.timing(keyboardOffset, {
+        duration: Math.max(120, event.duration ?? 220),
+        easing: Easing.out(Easing.cubic),
+        toValue: height,
+        useNativeDriver: true
+      }).start();
+    });
+
+    const hideSubscription = NativeKeyboard.addListener(hideEvent, (event) => {
+      setKeyboardVisible(false);
+      Animated.timing(keyboardOffset, {
+        duration: Math.max(120, event.duration ?? 180),
+        easing: Easing.in(Easing.cubic),
+        toValue: 0,
+        useNativeDriver: true
+      }).start();
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [keyboardOffset]);
 
   async function connect(): Promise<void> {
     const nextConnection = {
@@ -256,6 +290,14 @@ export default function App(): React.ReactElement {
     terminalRef.current?.send(data);
   }
 
+  function toggleTerminalKeyboard(): void {
+    if (keyboardVisible) {
+      terminalRef.current?.dismissKeyboard();
+    } else {
+      terminalRef.current?.focusKeyboard();
+    }
+  }
+
   function flushPendingRename(): void {
     const target = pendingRenameTargetRef.current;
     if (!target) {
@@ -351,6 +393,9 @@ export default function App(): React.ReactElement {
                         inputRange: [0, 1],
                         outputRange: [0, -COMMAND_BAR_HEIGHT]
                       })
+                    },
+                    {
+                      translateY: Animated.multiply(keyboardOffset, -1)
                     }
                   ]
                 }
@@ -385,11 +430,14 @@ export default function App(): React.ReactElement {
         </View>
 
         <CommandBar
+          keyboardOffset={keyboardOffset}
+          keyboardVisible={keyboardVisible}
           progress={commandProgress}
           visible={commandBarVisible}
           onArrowDown={() => sendTerminalKey("\u001b[B")}
           onArrowUp={() => sendTerminalKey("\u001b[A")}
           onControl={() => sendTerminalKey("\u0003")}
+          onKeyboard={toggleTerminalKeyboard}
           onMenu={() => setShowSwitcher((value) => !value)}
           onToggle={() => setCommandBarVisible((value) => !value)}
         />
@@ -665,22 +713,29 @@ function WindowNode({
 }
 
 function CommandBar({
+  keyboardOffset,
+  keyboardVisible,
   progress,
   visible,
   onArrowDown,
   onArrowUp,
   onControl,
+  onKeyboard,
   onMenu,
   onToggle
 }: {
+  keyboardOffset: CommandProgress;
+  keyboardVisible: boolean;
   progress: CommandProgress;
   visible: boolean;
   onArrowDown(): void;
   onArrowUp(): void;
   onControl(): void;
+  onKeyboard(): void;
   onMenu(): void;
   onToggle(): void;
 }): React.ReactElement {
+  const keyboardTranslateY = Animated.multiply(keyboardOffset, -1);
   const barTranslateY = progress.interpolate({
     inputRange: [0, 1],
     outputRange: [COMMAND_BAR_HEIGHT + 10, 0]
@@ -706,7 +761,7 @@ function CommandBar({
           styles.commandBar,
           {
             opacity: progress,
-            transform: [{ translateY: barTranslateY }]
+            transform: [{ translateY: keyboardTranslateY }, { translateY: barTranslateY }]
           }
         ]}
       >
@@ -715,6 +770,13 @@ function CommandBar({
         <CommandTextButton label="Send Ctrl-C" text="Ctrl" onPress={onControl} />
         <CommandIconButton icon={ArrowUp} iosSymbol="arrow.up" label="Arrow up" onPress={onArrowUp} />
         <CommandIconButton icon={ArrowDown} iosSymbol="arrow.down" label="Arrow down" onPress={onArrowDown} />
+        <CommandIconButton
+          active={keyboardVisible}
+          icon={KeyboardIcon}
+          iosSymbol="keyboard"
+          label={keyboardVisible ? "Hide keyboard" : "Show keyboard"}
+          onPress={onKeyboard}
+        />
         <View style={styles.commandSpacer} />
         <CommandIconButton icon={ChevronDown} iosSymbol="chevron.down" label="Hide command bar" onPress={onToggle} />
       </Animated.View>
@@ -724,7 +786,7 @@ function CommandBar({
           styles.commandBarCollapsed,
           {
             opacity: toggleOpacity,
-            transform: [{ translateY: toggleTranslateY }, { scale: toggleScale }]
+            transform: [{ translateY: keyboardTranslateY }, { translateY: toggleTranslateY }, { scale: toggleScale }]
           }
         ]}
       >
@@ -735,11 +797,13 @@ function CommandBar({
 }
 
 function CommandIconButton({
+  active,
   icon: Icon,
   iosSymbol,
   label,
   onPress
 }: {
+  active?: boolean;
   icon: IconType;
   iosSymbol: ExpoIconName;
   label: string;
@@ -747,7 +811,7 @@ function CommandIconButton({
 }): React.ReactElement {
   return (
     <TouchableOpacity accessibilityLabel={label} onPress={onPress} style={styles.commandButton}>
-      <AdaptiveIcon fallback={Icon} iosSymbol={iosSymbol} color={palette.text} size={18} />
+      <AdaptiveIcon fallback={Icon} iosSymbol={iosSymbol} color={active ? palette.accent : palette.text} size={18} />
     </TouchableOpacity>
   );
 }

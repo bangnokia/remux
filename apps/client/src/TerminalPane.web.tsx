@@ -15,8 +15,14 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   const [connected, setConnected] = useState(false);
 
   useImperativeHandle(ref, () => ({
+    dismissKeyboard() {
+      terminalRef.current?.focus();
+    },
     send(data: string) {
       sendSocket(socketRef.current, { type: "input", data });
+      terminalRef.current?.focus();
+    },
+    focusKeyboard() {
       terminalRef.current?.focus();
     },
     fit() {
