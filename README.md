@@ -13,7 +13,7 @@ The server controls tmux on the same machine where it runs. If you already have 
 
 ## Download Builds
 
-GitHub Actions publishes build outputs to GitHub Releases only when a tag is pushed. Normal `main` pushes and pull requests run the build without publishing release assets.
+GitHub Actions builds and publishes release assets only when a tag is pushed. Normal commits, `main` pushes, and pull requests do not trigger the GitHub build workflow.
 
 Download from:
 
