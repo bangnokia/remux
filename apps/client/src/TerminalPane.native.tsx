@@ -1,19 +1,46 @@
-import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from "react";
+import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { TextInput as NativeTextInput } from "react-native";
 import { WebView } from "react-native-webview";
 import { StyleSheet, View } from "./rn";
 import type { TerminalPaneHandle, TerminalPaneProps } from "./terminal-types";
+
+const KEYBOARD_PROXY_VALUE = " ";
+const KEYBOARD_PROXY_SELECTION = {
+  end: KEYBOARD_PROXY_VALUE.length,
+  start: KEYBOARD_PROXY_VALUE.length
+};
 
 const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane(
   { wsUrl, onStatus, onTreeChanged },
   ref
 ) {
   const webViewRef = useRef<WebView>(null);
+  const keyboardInputRef = useRef<NativeTextInput>(null);
   const lastLayoutRef = useRef<{ width: number; height: number } | null>(null);
+  const [keyboardProxyValue, setKeyboardProxyValue] = useState(KEYBOARD_PROXY_VALUE);
   const html = useMemo(() => terminalHtml(wsUrl), [wsUrl]);
 
-  const focusTerminal = useCallback(() => {
+  const focusWebTerminal = useCallback(() => {
     webViewRef.current?.injectJavaScript("window.remuxFocus && window.remuxFocus(); true;");
   }, []);
+
+  const resetKeyboardProxy = useCallback(() => {
+    setKeyboardProxyValue(KEYBOARD_PROXY_VALUE);
+    keyboardInputRef.current?.setNativeProps({
+      selection: KEYBOARD_PROXY_SELECTION,
+      text: KEYBOARD_PROXY_VALUE
+    });
+  }, []);
+
+  const focusKeyboardProxy = useCallback(() => {
+    keyboardInputRef.current?.focus();
+    resetKeyboardProxy();
+  }, [resetKeyboardProxy]);
+
+  const focusTerminal = useCallback(() => {
+    focusKeyboardProxy();
+    focusWebTerminal();
+  }, [focusKeyboardProxy, focusWebTerminal]);
 
   const handleLayout = useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
     const { width, height } = event.nativeEvent.layout;
@@ -45,15 +72,33 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     []
   );
 
+  const handleKeyboardProxyChange = useCallback(
+    (nextValue: string) => {
+      if (nextValue === KEYBOARD_PROXY_VALUE) {
+        return;
+      }
+
+      const rawInput = nextValue.length === 0
+        ? "\u007f"
+        : nextValue.startsWith(KEYBOARD_PROXY_VALUE)
+          ? nextValue.slice(KEYBOARD_PROXY_VALUE.length)
+          : nextValue;
+      const terminalInput = rawInput.replace(/\n/g, "\r");
+      sendToTerminal(terminalInput);
+      resetKeyboardProxy();
+    },
+    [resetKeyboardProxy, sendToTerminal]
+  );
+
   useImperativeHandle(ref, () => ({
     send(data: string) {
       sendToTerminal(data);
-      focusTerminal();
+      focusWebTerminal();
     },
     fit() {
       webViewRef.current?.injectJavaScript("window.remuxFit && window.remuxFit(); true;");
     }
-  }), [focusTerminal, sendToTerminal]);
+  }), [focusWebTerminal, sendToTerminal]);
 
   function handleMessage(event: unknown): void {
     const data = readWebViewMessageData(event);
@@ -61,7 +106,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       const message = JSON.parse(data) as { type: string; value?: string };
       if (message.type === "status") {
         onStatus(message.value ?? "");
-        focusTerminal();
+        focusWebTerminal();
       } else if (message.type === "treeChanged") {
         onTreeChanged();
       }
@@ -89,6 +134,23 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         hideKeyboardAccessoryView
         keyboardDisplayRequiresUserAction={false}
         scrollEnabled={false}
+      />
+      <NativeTextInput
+        ref={keyboardInputRef}
+        autoCapitalize="none"
+        autoComplete="off"
+        autoCorrect={false}
+        blurOnSubmit={false}
+        caretHidden
+        contextMenuHidden
+        keyboardAppearance="dark"
+        multiline
+        onChangeText={handleKeyboardProxyChange}
+        onFocus={resetKeyboardProxy}
+        selection={KEYBOARD_PROXY_SELECTION}
+        spellCheck={false}
+        style={styles.keyboardProxy}
+        value={keyboardProxyValue}
       />
     </View>
   );
@@ -326,6 +388,17 @@ const styles = StyleSheet.create({
   webView: {
     backgroundColor: "#0d1110",
     flex: 1
+  },
+  keyboardProxy: {
+    backgroundColor: "transparent",
+    bottom: 0,
+    color: "transparent",
+    height: 1,
+    left: 0,
+    opacity: 0.01,
+    padding: 0,
+    position: "absolute",
+    width: 1
   }
 });
 
