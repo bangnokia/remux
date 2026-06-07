@@ -1,9 +1,11 @@
-import { FitAddon, Terminal, init } from "ghostty-web";
+import { CanvasRenderer, FitAddon, Terminal, init } from "ghostty-web";
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { TerminalServerMessage } from "@telemux/protocol";
 import {
   TERMINAL_FONT_FACE,
   TERMINAL_FONT_FAMILY,
+  TERMINAL_FONT_SIZE,
+  TERMINAL_LINE_HEIGHT,
   TERMINAL_TOP_PADDING,
   resolveTerminalFontUri,
   terminalFontFaceCss
@@ -49,11 +51,12 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         return;
       }
 
+      installGhosttyLineHeight();
       const terminal = new Terminal({
         cursorBlink: true,
         convertEol: true,
         fontFamily: TERMINAL_FONT_FAMILY,
-        fontSize: 13,
+        fontSize: TERMINAL_FONT_SIZE,
         theme: {
           background: "#0d1110",
           foreground: "#d8e5de",
@@ -178,6 +181,47 @@ function sendSocket(socket: WebSocket | null, payload: unknown): void {
   }
 }
 
+interface TerminalFontMetrics {
+  width: number;
+  height: number;
+  baseline: number;
+}
+
+interface TeleMuxCanvasRendererPrototype {
+  measureFont?: () => TerminalFontMetrics;
+  __telemuxOriginalMeasureFont?: () => TerminalFontMetrics;
+  __telemuxLineHeight?: number;
+}
+
+function installGhosttyLineHeight(): void {
+  const prototype = (CanvasRenderer as unknown as { prototype?: TeleMuxCanvasRendererPrototype }).prototype;
+  if (!prototype?.measureFont) {
+    return;
+  }
+
+  prototype.__telemuxOriginalMeasureFont ??= prototype.measureFont;
+
+  if (prototype.__telemuxLineHeight === TERMINAL_LINE_HEIGHT) {
+    return;
+  }
+
+  prototype.measureFont = function measureFontWithTelemuxLineHeight(this: unknown): TerminalFontMetrics {
+    const metrics = prototype.__telemuxOriginalMeasureFont?.call(this);
+    if (!metrics?.height || !metrics.baseline) {
+      return metrics ?? { width: 0, height: 0, baseline: 0 };
+    }
+
+    const nextHeight = Math.max(metrics.height, Math.ceil(metrics.height * TERMINAL_LINE_HEIGHT));
+    const extraHeight = nextHeight - metrics.height;
+    return {
+      ...metrics,
+      height: nextHeight,
+      baseline: metrics.baseline + Math.floor(extraHeight / 2)
+    };
+  };
+  prototype.__telemuxLineHeight = TERMINAL_LINE_HEIGHT;
+}
+
 function installTerminalFontFace(): () => void {
   const fontUri = resolveTerminalFontUri();
   const cssText = terminalFontFaceCss(fontUri);
@@ -201,7 +245,7 @@ async function loadTerminalFont(): Promise<void> {
   }
 
   try {
-    await document.fonts.load(`13px "${TERMINAL_FONT_FACE}"`);
+    await document.fonts.load(`${TERMINAL_FONT_SIZE}px "${TERMINAL_FONT_FACE}"`);
     await document.fonts.ready;
   } catch {
     // The terminal still has a monospace fallback if the custom font cannot load.

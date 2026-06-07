@@ -22,11 +22,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: npm
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -35,13 +41,13 @@ jobs:
           java-version: "17"
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Build standalone server CLI
-        run: npm run build:server:standalone
+        run: pnpm run build:server:standalone
 
       - name: Smoke test server CLI
         run: node dist/telemux-server.mjs --help
@@ -52,7 +58,7 @@ jobs:
           sha256sum dist/telemux-server-node24.tar.gz > dist/telemux-server-node24.tar.gz.sha256
 
       - name: Prebuild Android project
-        run: npm --workspace @telemux/client run prebuild:android
+        run: pnpm --filter @telemux/client run prebuild:android
 
       - name: Tune Gradle memory
         run: |
@@ -94,7 +100,7 @@ jobs:
           mkdir -p dist/ios
           (
             cd apps/client
-            npx eas-cli@latest build \
+            pnpm dlx eas-cli@latest build \
               --platform ios \
               --profile production \
               --non-interactive \

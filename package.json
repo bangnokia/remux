@@ -1,6 +1,6 @@
 {
   "name": "telemux",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -8,13 +8,13 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:server": "npm --workspace @telemux/server run dev",
-    "dev:client": "npm --workspace @telemux/client run dev",
-    "build:android:apk": "npm --workspace @telemux/client run build:android:apk",
+    "dev:server": "pnpm --filter @telemux/server run dev",
+    "dev:client": "pnpm --filter @telemux/client run dev",
+    "build:android:apk": "pnpm --filter @telemux/client run build:android:apk",
     "build:server:standalone": "node scripts/build-server-cli.mjs",
-    "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "build": "pnpm --recursive --if-present run build",
+    "typecheck": "pnpm --recursive --if-present run typecheck",
+    "test": "pnpm --recursive --if-present run test"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

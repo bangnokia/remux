@@ -90,14 +90,14 @@ export default function App(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [connectingConnectionId, setConnectingConnectionId] = useState<string | null>(null);
   const [showSwitcher, setShowSwitcher] = useState(false);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
 
   const client = useMemo(() => (connection ? new TelemuxClient(connection) : null), [connection]);
   const selected = useMemo(() => findSelectedTarget(tree, selectedPaneId), [tree, selectedPaneId]);
   const terminalUrl = client && selectedPaneId ? client.terminalWebSocketUrl(selectedPaneId) : null;
-  const terminalBottomInset = COMMAND_BAR_HEIGHT + keyboardHeight;
+  const terminalBottomInset = COMMAND_BAR_HEIGHT;
+  const terminalTranslateY = Animated.multiply(keyboardOffset, -1);
 
   const refreshTree = useCallback(async () => {
     if (!client) {
@@ -174,7 +174,6 @@ export default function App(): React.ReactElement {
 
     const showSubscription = NativeKeyboard.addListener(showEvent, (event) => {
       const height = Math.max(0, event.endCoordinates?.height ?? 0);
-      setKeyboardHeight(height);
       setKeyboardVisible(true);
       Animated.timing(keyboardOffset, {
         duration: Math.max(120, event.duration ?? 220),
@@ -185,7 +184,6 @@ export default function App(): React.ReactElement {
     });
 
     const hideSubscription = NativeKeyboard.addListener(hideEvent, (event) => {
-      setKeyboardHeight(0);
       setKeyboardVisible(false);
       Animated.timing(keyboardOffset, {
         duration: Math.max(120, event.duration ?? 180),
@@ -408,7 +406,8 @@ export default function App(): React.ReactElement {
               style={[
                 styles.terminalFrame,
                 {
-                  marginBottom: terminalBottomInset
+                  marginBottom: terminalBottomInset,
+                  transform: [{ translateY: terminalTranslateY }]
                 }
               ]}
             >
@@ -1137,6 +1136,20 @@ function CommandKeyboardButton({
     });
   }, [resetInput]);
 
+  const dismissInput = useCallback(() => {
+    inputRef.current?.blur();
+    NativeKeyboard.dismiss();
+  }, []);
+
+  const toggleInput = useCallback(() => {
+    if (active) {
+      dismissInput();
+      return;
+    }
+
+    focusInput();
+  }, [active, dismissInput, focusInput]);
+
   const handleChangeText = useCallback((nextValue: string) => {
     if (nextValue === COMMAND_KEYBOARD_PROXY_VALUE) {
       return;
@@ -1154,9 +1167,12 @@ function CommandKeyboardButton({
   return (
     <Pressable
       accessibilityLabel={label}
-      onPress={focusInput}
-      onPressIn={focusInput}
-      onTouchStart={focusInput}
+      onPressIn={() => {
+        if (!active) {
+          focusInput();
+        }
+      }}
+      onPress={toggleInput}
       style={styles.commandKeyboardButton}
     >
       <AdaptiveIcon fallback={KeyboardIcon} iosSymbol="keyboard" color={active ? palette.accent : palette.text} size={18} />
@@ -1173,8 +1189,7 @@ function CommandKeyboardButton({
         multiline
         onChangeText={handleChangeText}
         onFocus={resetInput}
-        onPressIn={focusInput}
-        onTouchStart={focusInput}
+        pointerEvents="none"
         selection={COMMAND_KEYBOARD_PROXY_SELECTION}
         showSoftInputOnFocus
         spellCheck={false}

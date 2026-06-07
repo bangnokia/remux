@@ -4,6 +4,8 @@ import type { TerminalClientMessage, TerminalServerMessage } from "@telemux/prot
 import type { MetadataStore } from "./metadata.js";
 import type { TmuxService } from "./tmux.js";
 
+const TERMINAL_SNAPSHOT_HISTORY_LINES = 2000;
+
 export class TerminalBridge {
   private process: ChildProcessWithoutNullStreams | null = null;
   private lineBuffer = "";
@@ -126,7 +128,10 @@ export class TerminalBridge {
   }
 
   private async sendSnapshot(): Promise<void> {
-    const [data, size] = await Promise.all([this.tmux.capturePane(this.paneId), this.tmux.paneSize(this.paneId)]);
+    const [data, size] = await Promise.all([
+      this.tmux.capturePane(this.paneId, TERMINAL_SNAPSHOT_HISTORY_LINES),
+      this.tmux.paneSize(this.paneId)
+    ]);
     this.send({
       type: "snapshot",
       paneId: this.paneId,

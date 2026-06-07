@@ -5,6 +5,8 @@ const IOSKELEY_MONO_TERM_REGULAR = require("../assets/fonts/IoskeleyMono/Ioskele
 
 export const TERMINAL_FONT_FACE = "Ioskeley Mono Term";
 export const TERMINAL_FONT_FAMILY = `"${TERMINAL_FONT_FACE}", "Ioskeley Mono", Menlo, "Cascadia Code", monospace`;
+export const TERMINAL_FONT_SIZE = 13;
+export const TERMINAL_LINE_HEIGHT = 1.5;
 export const TERMINAL_TOP_PADDING = 4;
 
 export function resolveTerminalFontUri(): string | null {

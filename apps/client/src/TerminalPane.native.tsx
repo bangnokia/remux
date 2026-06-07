@@ -1,45 +1,25 @@
-import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from "react";
-import { Keyboard as NativeKeyboard, TextInput as NativeTextInput } from "react-native";
+import React, { forwardRef, useCallback, useImperativeHandle, useRef } from "react";
+import { Keyboard as NativeKeyboard } from "react-native";
 import { WebView } from "react-native-webview";
 import { StyleSheet, View } from "./rn";
 import {
   TERMINAL_FONT_FACE,
   TERMINAL_FONT_FAMILY,
+  TERMINAL_FONT_SIZE,
+  TERMINAL_LINE_HEIGHT,
   TERMINAL_TOP_PADDING,
   resolveTerminalFontUri,
   terminalFontFaceCss
 } from "./terminal-font";
 import type { TerminalPaneHandle, TerminalPaneProps } from "./terminal-types";
 
-const KEYBOARD_PROXY_VALUE = " ";
-const KEYBOARD_PROXY_SELECTION = {
-  end: KEYBOARD_PROXY_VALUE.length,
-  start: KEYBOARD_PROXY_VALUE.length
-};
 const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane(
   { wsUrl, onStatus, onTreeChanged },
   ref
 ) {
   const webViewRef = useRef<WebView>(null);
-  const keyboardInputRef = useRef<NativeTextInput>(null);
   const lastLayoutRef = useRef<{ width: number; height: number } | null>(null);
-  const html = useMemo(() => terminalHtml(wsUrl), [wsUrl]);
-
-  const resetKeyboardProxy = useCallback(() => {
-    keyboardInputRef.current?.setNativeProps({
-      selection: KEYBOARD_PROXY_SELECTION,
-      text: KEYBOARD_PROXY_VALUE
-    });
-  }, []);
-
-  const focusKeyboardProxy = useCallback(() => {
-    resetKeyboardProxy();
-    keyboardInputRef.current?.focus();
-    requestAnimationFrame(() => {
-      resetKeyboardProxy();
-      keyboardInputRef.current?.focus();
-    });
-  }, [resetKeyboardProxy]);
+  const html = terminalHtml(wsUrl);
 
   const handleLayout = useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
     const { width, height } = event.nativeEvent.layout;
@@ -71,27 +51,8 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     []
   );
 
-  const handleKeyboardProxyChange = useCallback(
-    (nextValue: string) => {
-      if (nextValue === KEYBOARD_PROXY_VALUE) {
-        return;
-      }
-
-      const rawInput = nextValue.length === 0
-        ? "\u007f"
-        : nextValue.startsWith(KEYBOARD_PROXY_VALUE)
-          ? nextValue.slice(KEYBOARD_PROXY_VALUE.length)
-          : nextValue;
-      const terminalInput = rawInput.replace(/\n/g, "\r");
-      sendToTerminal(terminalInput);
-      resetKeyboardProxy();
-    },
-    [resetKeyboardProxy, sendToTerminal]
-  );
-
   useImperativeHandle(ref, () => ({
     dismissKeyboard() {
-      keyboardInputRef.current?.blur();
       NativeKeyboard.dismiss();
     },
     send(data: string) {
@@ -101,12 +62,12 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       sendToTerminal(data);
     },
     focusKeyboard() {
-      focusKeyboardProxy();
+      NativeKeyboard.dismiss();
     },
     fit() {
       webViewRef.current?.injectJavaScript("window.telemuxFit && window.telemuxFit(); true;");
     }
-  }), [focusKeyboardProxy, sendToTerminal]);
+  }), [sendToTerminal]);
 
   function handleMessage(event: unknown): void {
     const data = readWebViewMessageData(event);
@@ -114,8 +75,6 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       const message = JSON.parse(data) as { type: string; value?: string };
       if (message.type === "status") {
         onStatus(message.value ?? "");
-      } else if (message.type === "focus") {
-        focusKeyboardProxy();
       } else if (message.type === "treeChanged") {
         onTreeChanged();
       }
@@ -127,6 +86,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   return (
     <View onLayout={handleLayout} style={styles.shell}>
       <WebView
+        key={`${wsUrl}:${TERMINAL_FONT_SIZE}:${TERMINAL_LINE_HEIGHT}`}
         ref={webViewRef}
         originWhitelist={["*"]}
         source={{ html }}
@@ -141,29 +101,8 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         automaticallyAdjustContentInsets={false}
         contentInsetAdjustmentBehavior="never"
         hideKeyboardAccessoryView
-        keyboardDisplayRequiresUserAction={false}
-        pointerEvents="none"
+        keyboardDisplayRequiresUserAction
         scrollEnabled={false}
-      />
-      <NativeTextInput
-        ref={keyboardInputRef}
-        autoCapitalize="none"
-        autoComplete="off"
-        autoCorrect={false}
-        blurOnSubmit={false}
-        caretHidden
-        contextMenuHidden
-        defaultValue={KEYBOARD_PROXY_VALUE}
-        keyboardAppearance="dark"
-        multiline
-        onChangeText={handleKeyboardProxyChange}
-        onFocus={resetKeyboardProxy}
-        onPressIn={focusKeyboardProxy}
-        onTouchStart={focusKeyboardProxy}
-        selection={KEYBOARD_PROXY_SELECTION}
-        showSoftInputOnFocus
-        spellCheck={false}
-        style={styles.keyboardProxy}
       />
     </View>
   );
@@ -180,6 +119,8 @@ function terminalHtml(wsUrl: string): string {
   const terminalFontCss = terminalFontFaceCss(terminalFontUri);
   const encodedTerminalFontFace = JSON.stringify(TERMINAL_FONT_FACE);
   const encodedTerminalFontFamily = JSON.stringify(TERMINAL_FONT_FAMILY);
+  const encodedTerminalFontSize = JSON.stringify(TERMINAL_FONT_SIZE);
+  const encodedTerminalLineHeight = JSON.stringify(TERMINAL_LINE_HEIGHT);
   return `<!doctype html>
 <html>
 <head>
@@ -213,7 +154,10 @@ function terminalHtml(wsUrl: string): string {
       position: fixed;
       left: 0;
       top: var(--telemux-terminal-top-padding);
+      touch-action: none;
+      user-select: none;
       -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none;
       width: var(--telemux-width, 100vw);
     }
 
@@ -250,10 +194,12 @@ function terminalHtml(wsUrl: string): string {
     let pendingViewportFit;
     let lastSentCols;
     let lastSentRows;
-    let lastNativeKeyboardFocusAt = 0;
     const terminalFontFace = ${encodedTerminalFontFace};
     const terminalFontFamily = ${encodedTerminalFontFamily};
+    const terminalFontSize = ${encodedTerminalFontSize};
+    const terminalLineHeight = ${encodedTerminalLineHeight};
     const terminalTopPadding = ${TERMINAL_TOP_PADDING};
+    const touchScrollLinePx = 22;
 
     window.telemuxFit = () => {
       try {
@@ -275,7 +221,13 @@ function terminalHtml(wsUrl: string): string {
     };
 
     window.telemuxSend = (data) => {
+      term && term.scrollToBottom && term.scrollToBottom();
       socket && socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'input', data }));
+    };
+
+    window.telemuxScroll = (lines) => {
+      if (!term || typeof term.scrollLines !== 'function' || !Number.isFinite(lines)) return;
+      term.scrollLines(lines);
     };
 
     window.telemuxFocus = () => {
@@ -287,12 +239,13 @@ function terminalHtml(wsUrl: string): string {
     async function main() {
       post({ type: 'status', value: 'terminal loading' });
       await loadTerminalFont();
-      const { FitAddon, Terminal, init } = await importGhostty();
+      const { CanvasRenderer, FitAddon, Terminal, init } = await importGhostty();
       await init();
+      installGhosttyLineHeight(CanvasRenderer);
       term = new Terminal({
         cursorBlink: true,
         convertEol: true,
-        fontSize: 13,
+        fontSize: terminalFontSize,
         fontFamily: terminalFontFamily,
         theme: { background: '#0d1110', foreground: '#d8e5de', cursor: '#7ce38b', selectionBackground: '#2b3a32' }
       });
@@ -300,7 +253,8 @@ function terminalHtml(wsUrl: string): string {
       term.loadAddon(fit);
       const terminalRoot = document.getElementById('terminal');
       term.open(terminalRoot);
-      installNativeFocusBridge(terminalRoot);
+      term.blur && term.blur();
+      installNativeTouchScroll(terminalRoot);
       hideNativeCaret();
       fit.observeResize();
       scheduleFit();
@@ -392,23 +346,114 @@ function terminalHtml(wsUrl: string): string {
       if (!document.fonts || !terminalFontFace) return;
 
       try {
-        await document.fonts.load('13px "' + terminalFontFace + '"');
+        await document.fonts.load(terminalFontSize + 'px "' + terminalFontFace + '"');
         await document.fonts.ready;
       } catch {}
     }
 
-    function installNativeFocusBridge(root) {
+    function installNativeTouchScroll(root) {
       if (!root) return;
-      const requestNativeKeyboard = () => {
-        const now = Date.now();
-        if (now - lastNativeKeyboardFocusAt < 120) return;
-        lastNativeKeyboardFocusAt = now;
-        post({ type: 'focus' });
+      let lastY = 0;
+      let remainderPx = 0;
+      let activeTouchId = null;
+
+      const stopEvent = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') {
+          event.stopImmediatePropagation();
+        }
       };
 
-      root.addEventListener('pointerdown', requestNativeKeyboard, { passive: true });
-      root.addEventListener('touchstart', requestNativeKeyboard, { passive: true });
-      root.addEventListener('focusin', requestNativeKeyboard, { passive: true });
+      const blurWebInput = () => {
+        try {
+          term && term.blur && term.blur();
+          const active = document.activeElement;
+          active && typeof active.blur === 'function' && active.blur();
+        } catch {}
+      };
+
+      const scrollByPixels = (deltaY) => {
+        if (!term || typeof term.scrollLines !== 'function' || !Number.isFinite(deltaY)) return;
+        remainderPx += deltaY;
+        const lineDelta = Math.trunc(remainderPx / touchScrollLinePx);
+        if (lineDelta === 0) return;
+        remainderPx -= lineDelta * touchScrollLinePx;
+        term.scrollLines(-lineDelta);
+      };
+
+      root.addEventListener('touchstart', (event) => {
+        const touch = event.changedTouches && event.changedTouches[0];
+        if (!touch) return;
+        activeTouchId = touch.identifier;
+        lastY = touch.clientY;
+        remainderPx = 0;
+        blurWebInput();
+        stopEvent(event);
+      }, { passive: false, capture: true });
+
+      root.addEventListener('touchmove', (event) => {
+        const touches = Array.from(event.changedTouches || []);
+        const touch = touches.find((item) => item.identifier === activeTouchId) || touches[0];
+        if (!touch) return;
+        const deltaY = touch.clientY - lastY;
+        lastY = touch.clientY;
+        scrollByPixels(deltaY);
+        blurWebInput();
+        stopEvent(event);
+      }, { passive: false, capture: true });
+
+      root.addEventListener('touchend', (event) => {
+        activeTouchId = null;
+        blurWebInput();
+        stopEvent(event);
+      }, { passive: false, capture: true });
+
+      root.addEventListener('touchcancel', (event) => {
+        activeTouchId = null;
+        blurWebInput();
+        stopEvent(event);
+      }, { passive: false, capture: true });
+
+      root.addEventListener('pointerdown', (event) => {
+        blurWebInput();
+        stopEvent(event);
+      }, { passive: false, capture: true });
+
+      root.addEventListener('mousedown', (event) => {
+        blurWebInput();
+        stopEvent(event);
+      }, { passive: false, capture: true });
+
+      root.addEventListener('wheel', (event) => {
+        scrollByPixels(event.deltaY);
+        stopEvent(event);
+      }, { passive: false, capture: true });
+    }
+
+    function installGhosttyLineHeight(CanvasRenderer) {
+      const prototype = CanvasRenderer && CanvasRenderer.prototype;
+      if (!prototype || typeof prototype.measureFont !== 'function') return;
+
+      if (!prototype.__telemuxOriginalMeasureFont) {
+        prototype.__telemuxOriginalMeasureFont = prototype.measureFont;
+      }
+
+      if (prototype.__telemuxLineHeight === terminalLineHeight) return;
+
+      prototype.measureFont = function measureFontWithTelemuxLineHeight() {
+        const metrics = prototype.__telemuxOriginalMeasureFont.call(this);
+        if (!metrics || !metrics.height || !metrics.baseline) return metrics;
+
+        const nextHeight = Math.max(metrics.height, Math.ceil(metrics.height * terminalLineHeight));
+        const extraHeight = nextHeight - metrics.height;
+        return {
+          ...metrics,
+          height: nextHeight,
+          baseline: metrics.baseline + Math.floor(extraHeight / 2)
+        };
+      };
+      prototype.__telemuxLineHeight = terminalLineHeight;
     }
 
     function hideNativeCaret() {
@@ -417,9 +462,11 @@ function terminalHtml(wsUrl: string): string {
       root.style.setProperty('caret-color', 'transparent', 'important');
       root.style.setProperty('outline', 'none', 'important');
       for (const element of root.querySelectorAll('textarea, [contenteditable="true"]')) {
+        element.blur && element.blur();
+        element.setAttribute('readonly', 'readonly');
         element.style.setProperty('caret-color', 'transparent', 'important');
         element.style.setProperty('outline', 'none', 'important');
-      }
+      };
     }
 
     async function importGhostty() {
@@ -449,22 +496,6 @@ const styles = StyleSheet.create({
   webView: {
     backgroundColor: "#0d1110",
     flex: 1
-  },
-  keyboardProxy: {
-    backgroundColor: "transparent",
-    bottom: 0,
-    color: "transparent",
-    fontSize: 16,
-    height: "100%",
-    left: 0,
-    lineHeight: 20,
-    padding: 0,
-    position: "absolute",
-    right: 0,
-    textAlignVertical: "top",
-    top: 0,
-    width: "100%",
-    zIndex: 2
   }
 });
 
