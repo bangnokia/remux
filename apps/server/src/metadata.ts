@@ -1,9 +1,11 @@
 import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { createRequire as createNodeRequire } from "node:module";
 import { homedir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
+import { dirname, resolve } from "node:path";
+import type { DatabaseSync as NodeDatabaseSync } from "node:sqlite";
 import type { Preferences } from "@telemux/protocol";
 
+const require = createNodeRequire(import.meta.url);
 const DEFAULT_PREFERENCES: Preferences = {
   lastPaneId: null,
   favorites: [],
@@ -11,10 +13,13 @@ const DEFAULT_PREFERENCES: Preferences = {
 };
 
 export class MetadataStore {
-  private readonly db: DatabaseSync;
+  private readonly db: NodeDatabaseSync;
 
   constructor(databasePath: string) {
     const path = expandPath(databasePath);
+    const { DatabaseSync } = require("node:sqlite") as {
+      DatabaseSync: new (location: string) => NodeDatabaseSync;
+    };
     mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec(`

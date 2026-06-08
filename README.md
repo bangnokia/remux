@@ -106,8 +106,17 @@ The standalone CLI accepts these options:
 --no-auth              Disable bearer auth. Only use behind a trusted tunnel.
 --db-path <path>       Metadata database path. Default: ~/.telemux/telemux.db
 --tmux-socket <name>   tmux socket name, passed as tmux -L <name>.
+--version              Show CLI version.
 --help                 Show CLI help.
 ```
+
+The CLI also supports a self-update command:
+
+```bash
+~/telemux/telemux-server.mjs update
+```
+
+`update` checks the latest GitHub Release, downloads `telemux-server-node24.tar.gz`, and replaces the current `telemux-server.mjs` file when a newer version exists. Restart the service after updating if Telemux is running under systemd.
 
 The same config can be set with environment variables:
 
