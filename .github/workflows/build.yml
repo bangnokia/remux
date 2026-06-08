@@ -60,13 +60,18 @@ jobs:
       - name: Prebuild Android project
         run: pnpm --filter @telemux/client run prebuild:android
 
-      - name: Tune Gradle memory
+      - name: Tune Gradle
         run: |
           sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8/' apps/client/android/gradle.properties
           if grep -q '^org.gradle.parallel=' apps/client/android/gradle.properties; then
             sed -i 's/^org.gradle.parallel=.*/org.gradle.parallel=true/' apps/client/android/gradle.properties
           else
             printf '\norg.gradle.parallel=true\n' >> apps/client/android/gradle.properties
+          fi
+          if grep -q '^networkTimeout=' apps/client/android/gradle/wrapper/gradle-wrapper.properties; then
+            sed -i 's/^networkTimeout=.*/networkTimeout=60000/' apps/client/android/gradle/wrapper/gradle-wrapper.properties
+          else
+            printf '\nnetworkTimeout=60000\n' >> apps/client/android/gradle/wrapper/gradle-wrapper.properties
           fi
 
       - name: Build release APK
