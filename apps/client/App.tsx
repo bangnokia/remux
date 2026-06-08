@@ -642,13 +642,7 @@ function WelcomeScreen({
   const formConnecting = connectingConnectionId === NEW_CONNECTION_ID;
   const hasSavedServers = connections.length > 0;
   const sheetWidth = Math.max(0, width - 32);
-  const [showAddServerSheet, setShowAddServerSheet] = useState(!hasSavedServers);
-
-  useEffect(() => {
-    if (!hasSavedServers) {
-      setShowAddServerSheet(true);
-    }
-  }, [hasSavedServers]);
+  const [showAddServerSheet, setShowAddServerSheet] = useState(false);
 
   return (
     <SafeAreaView style={[styles.root, Platform.OS === "android" ? styles.androidSafeArea : null]}>
@@ -717,7 +711,7 @@ function WelcomeScreen({
             setupHost={setupHost}
             setupLabel={setupLabel}
             setupPort={setupPort}
-            onCancel={hasSavedServers ? () => setShowAddServerSheet(false) : undefined}
+            onCancel={() => setShowAddServerSheet(false)}
             onConnect={onConnect}
             onSetupHostChange={onSetupHostChange}
             onSetupLabelChange={onSetupLabelChange}

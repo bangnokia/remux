@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useImperativeHandle, useRef } from "react";
-import { Keyboard as NativeKeyboard } from "react-native";
+import { Keyboard as NativeKeyboard, Platform } from "react-native";
 import { WebView } from "react-native-webview";
 import { StyleSheet, View } from "./rn";
 import {
@@ -8,7 +8,7 @@ import {
   TERMINAL_FONT_SIZE,
   TERMINAL_LINE_HEIGHT,
   TERMINAL_TOP_PADDING,
-  resolveTerminalFontUri,
+  resolveTerminalFontUris,
   terminalFontFaceCss
 } from "./terminal-font";
 import type { TerminalPaneHandle, TerminalPaneProps } from "./terminal-types";
@@ -20,6 +20,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   const webViewRef = useRef<WebView>(null);
   const lastLayoutRef = useRef<{ width: number; height: number } | null>(null);
   const html = terminalHtml(wsUrl);
+  const source = Platform.OS === "android" ? { html, baseUrl: "file:///android_res/" } : { html };
 
   const handleLayout = useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
     const { width, height } = event.nativeEvent.layout;
@@ -89,7 +90,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         key={`${wsUrl}:${TERMINAL_FONT_SIZE}:${TERMINAL_LINE_HEIGHT}`}
         ref={webViewRef}
         originWhitelist={["*"]}
-        source={{ html }}
+        source={source}
         onMessage={handleMessage}
         onError={(event) => onStatus(event.nativeEvent.description || "terminal webview error")}
         onLoadEnd={syncLastViewportSize}
@@ -102,6 +103,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         contentInsetAdjustmentBehavior="never"
         hideKeyboardAccessoryView
         keyboardDisplayRequiresUserAction
+        allowFileAccess={Platform.OS === "android"}
         scrollEnabled={false}
       />
     </View>
@@ -115,8 +117,7 @@ function readWebViewMessageData(event: unknown): string {
 
 function terminalHtml(wsUrl: string): string {
   const encodedUrl = JSON.stringify(wsUrl);
-  const terminalFontUri = resolveTerminalFontUri();
-  const terminalFontCss = terminalFontFaceCss(terminalFontUri);
+  const terminalFontCss = terminalFontFaceCss(resolveTerminalFontUris());
   const encodedTerminalFontFace = JSON.stringify(TERMINAL_FONT_FACE);
   const encodedTerminalFontFamily = JSON.stringify(TERMINAL_FONT_FAMILY);
   const encodedTerminalFontSize = JSON.stringify(TERMINAL_FONT_SIZE);
