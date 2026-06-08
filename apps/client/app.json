@@ -2,14 +2,14 @@
   "expo": {
     "name": "Telemux",
     "slug": "telemux",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "orientation": "portrait",
     "scheme": "telemux",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bangnokia.telemux",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -20,7 +20,7 @@
       },
       "package": "com.bangnokia.telemux",
       "softwareKeyboardLayoutMode": "pan",
-      "versionCode": 6
+      "versionCode": 7
     },
     "web": {
       "bundler": "metro",

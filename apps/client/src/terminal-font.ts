@@ -6,8 +6,8 @@ const ANDROID_TERMINAL_FONT_URI = "file:///android_res/raw/assets_fonts_ioskeley
 
 export const TERMINAL_FONT_FACE = "Ioskeley Mono Term";
 export const TERMINAL_FONT_FAMILY = `"${TERMINAL_FONT_FACE}", "Ioskeley Mono", Menlo, "Cascadia Code", monospace`;
-export const TERMINAL_FONT_SIZE = 13;
-export const TERMINAL_LINE_HEIGHT = 1.5;
+export const TERMINAL_FONT_SIZE = 12;
+export const TERMINAL_LINE_HEIGHT = 1.25;
 export const TERMINAL_TOP_PADDING = 4;
 
 export function resolveTerminalFontUri(): string | null {

@@ -63,7 +63,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       sendToTerminal(data);
     },
     focusKeyboard() {
-      NativeKeyboard.dismiss();
+      webViewRef.current?.injectJavaScript("window.telemuxFocus && window.telemuxFocus(); true;");
     },
     fit() {
       webViewRef.current?.injectJavaScript("window.telemuxFit && window.telemuxFit(); true;");
@@ -195,6 +195,7 @@ function terminalHtml(wsUrl: string): string {
     let pendingViewportFit;
     let lastSentCols;
     let lastSentRows;
+    let followBottomUntil = 0;
     const terminalFontFace = ${encodedTerminalFontFace};
     const terminalFontFamily = ${encodedTerminalFontFamily};
     const terminalFontSize = ${encodedTerminalFontSize};
@@ -222,8 +223,7 @@ function terminalHtml(wsUrl: string): string {
     };
 
     window.telemuxSend = (data) => {
-      term && term.scrollToBottom && term.scrollToBottom();
-      socket && socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'input', data }));
+      sendTerminalInput(data);
     };
 
     window.telemuxScroll = (lines) => {
@@ -234,6 +234,7 @@ function terminalHtml(wsUrl: string): string {
     window.telemuxFocus = () => {
       try {
         hideNativeCaret();
+        scrollTerminalToBottom();
       } catch {}
     };
 
@@ -261,7 +262,7 @@ function terminalHtml(wsUrl: string): string {
       scheduleFit();
 
       term.onData((data) => {
-        socket && socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'input', data }));
+        sendTerminalInput(data);
       });
 
       term.onResize(({ cols, rows }) => {
@@ -281,11 +282,14 @@ function terminalHtml(wsUrl: string): string {
             term.resize(message.cols, message.rows);
           }
           term.write(message.data);
+          scrollTerminalToBottom();
           if (!hasNativeViewport) {
             scheduleFit();
           }
         } else if (message.type === 'output') {
           term.write(message.data);
+          scrollAfterRecentInput();
+          requestAnimationFrame(scrollAfterRecentInput);
         } else if (message.type === 'treeChanged') {
           post({ type: 'treeChanged' });
         } else if (message.type === 'error') {
@@ -295,6 +299,33 @@ function terminalHtml(wsUrl: string): string {
       window.addEventListener('resize', window.telemuxFit);
       setTimeout(hideNativeCaret, 0);
       scheduleFit();
+    }
+
+    function sendTerminalInput(data) {
+      followBottomUntil = Date.now() + 1000;
+      scrollTerminalToBottom();
+      socket && socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'input', data }));
+      requestAnimationFrame(scrollTerminalToBottom);
+      setTimeout(scrollTerminalToBottom, 50);
+      setTimeout(scrollTerminalToBottom, 150);
+    }
+
+    function scrollTerminalToBottom() {
+      try {
+        if (!term) return;
+        if (typeof term.scrollToBottom === 'function') {
+          term.scrollToBottom();
+        } else if (typeof term.scrollLines === 'function') {
+          const activeBufferLength = term.buffer && term.buffer.active && term.buffer.active.length;
+          term.scrollLines(activeBufferLength || 9999);
+        }
+      } catch {}
+    }
+
+    function scrollAfterRecentInput() {
+      if (Date.now() < followBottomUntil) {
+        scrollTerminalToBottom();
+      }
     }
 
     function applyViewportSize() {

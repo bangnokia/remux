@@ -65,6 +65,7 @@ const DEFAULT_SETUP_HOST = DEFAULT_SERVER_FIELDS.host;
 const DEFAULT_SETUP_PORT = DEFAULT_SERVER_FIELDS.port;
 const NEW_CONNECTION_ID = "__new_connection__";
 const COMMAND_BAR_HEIGHT = 52;
+const ANDROID_COMMAND_BAR_BOTTOM_INSET = 12;
 const COMMAND_KEYBOARD_PROXY_VALUE = " ";
 const COMMAND_KEYBOARD_PROXY_SELECTION = {
   end: COMMAND_KEYBOARD_PROXY_VALUE.length,
@@ -96,7 +97,8 @@ export default function App(): React.ReactElement {
   const client = useMemo(() => (connection ? new TelemuxClient(connection) : null), [connection]);
   const selected = useMemo(() => findSelectedTarget(tree, selectedPaneId), [tree, selectedPaneId]);
   const terminalUrl = client && selectedPaneId ? client.terminalWebSocketUrl(selectedPaneId) : null;
-  const terminalBottomInset = COMMAND_BAR_HEIGHT;
+  const commandBarBottomInset = Platform.OS === "android" ? ANDROID_COMMAND_BAR_BOTTOM_INSET : 0;
+  const terminalBottomInset = COMMAND_BAR_HEIGHT + commandBarBottomInset;
   const terminalTranslateY = Animated.multiply(keyboardOffset, -1);
 
   const refreshTree = useCallback(async () => {
@@ -340,6 +342,10 @@ export default function App(): React.ReactElement {
     terminalRef.current?.sendInput(data);
   }
 
+  function focusTerminalInput(): void {
+    terminalRef.current?.focusKeyboard();
+  }
+
   function flushPendingRename(): void {
     const target = pendingRenameTargetRef.current;
     if (!target) {
@@ -440,12 +446,14 @@ export default function App(): React.ReactElement {
         </View>
 
         <CommandBar
+          bottomInset={commandBarBottomInset}
           keyboardOffset={keyboardOffset}
           keyboardVisible={keyboardVisible}
           onArrowDown={() => sendTerminalKey("\u001b[B")}
           onArrowUp={() => sendTerminalKey("\u001b[A")}
           onControl={() => sendTerminalKey("\u0003")}
           onTab={() => sendTerminalKey("\t")}
+          onFocusTerminal={focusTerminalInput}
           onInput={sendTerminalInput}
           onMenu={() => setShowSwitcher((value) => !value)}
         />
@@ -1058,20 +1066,24 @@ function WindowNode({
 }
 
 function CommandBar({
+  bottomInset,
   keyboardOffset,
   keyboardVisible,
   onArrowDown,
   onArrowUp,
   onControl,
+  onFocusTerminal,
   onTab,
   onInput,
   onMenu
 }: {
+  bottomInset: number;
   keyboardOffset: CommandProgress;
   keyboardVisible: boolean;
   onArrowDown(): void;
   onArrowUp(): void;
   onControl(): void;
+  onFocusTerminal(): void;
   onTab(): void;
   onInput(data: string): void;
   onMenu(): void;
@@ -1083,6 +1095,7 @@ function CommandBar({
       style={[
         styles.commandBar,
         {
+          bottom: bottomInset,
           transform: [{ translateY: keyboardTranslateY }]
         }
       ]}
@@ -1096,6 +1109,7 @@ function CommandBar({
       <CommandKeyboardButton
         active={keyboardVisible}
         label="Keyboard input"
+        onFocusTerminal={onFocusTerminal}
         onInput={onInput}
       />
       <View style={styles.commandSpacer} />
@@ -1106,10 +1120,12 @@ function CommandBar({
 function CommandKeyboardButton({
   active,
   label,
+  onFocusTerminal,
   onInput
 }: {
   active: boolean;
   label: string;
+  onFocusTerminal(): void;
   onInput(data: string): void;
 }): React.ReactElement {
   const inputRef = useRef<NativeTextInput>(null);
@@ -1122,13 +1138,15 @@ function CommandKeyboardButton({
   }, []);
 
   const focusInput = useCallback(() => {
+    onFocusTerminal();
     resetInput();
     inputRef.current?.focus();
     requestAnimationFrame(() => {
+      onFocusTerminal();
       resetInput();
       inputRef.current?.focus();
     });
-  }, [resetInput]);
+  }, [onFocusTerminal, resetInput]);
 
   const dismissInput = useCallback(() => {
     inputRef.current?.blur();
@@ -2006,7 +2024,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(16, 20, 18, 0.92)",
     borderTopColor: "rgba(216, 229, 222, 0.08)",
     borderTopWidth: 1,
-    bottom: 0,
     flexDirection: "row",
     gap: 7,
     height: COMMAND_BAR_HEIGHT,
