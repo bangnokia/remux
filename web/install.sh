@@ -14,6 +14,7 @@ INSTALL_SERVICE=1
 START_SERVICE=1
 ASSUME_YES="${TELEMUX_YES:-0}"
 NODE_BIN=""
+SERVICE_NODE_BIN=""
 
 if [ -n "$TOKEN" ]; then
   AUTH_MODE="token"
@@ -252,17 +253,27 @@ run_root() {
   sudo "$@"
 }
 
-node_major() {
-  if ! command -v node >/dev/null 2>&1; then
+node_major_for_bin() {
+  local bin="$1"
+
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
     printf '0'
     return
   fi
 
-  node -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || printf '0'
+  "$bin" -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || printf '0'
+}
+
+node_major() {
+  node_major_for_bin "$(command -v node 2>/dev/null || true)"
 }
 
 has_node24() {
   [ "$(node_major)" -ge 24 ]
+}
+
+has_node24_bin() {
+  [ "$(node_major_for_bin "$1")" -ge 24 ]
 }
 
 resolve_node_bin() {
@@ -273,6 +284,79 @@ resolve_node_bin() {
     /*) ;;
     *) fail "node path is not absolute: $NODE_BIN" ;;
   esac
+}
+
+path_is_under_target_home() {
+  case "$1" in
+    "$TARGET_HOME"|"$TARGET_HOME"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+find_service_node_bin() {
+  local candidate=""
+  local command_node=""
+
+  command_node="$(command -v node 2>/dev/null || true)"
+
+  for candidate in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node "$command_node"; do
+    [ -n "$candidate" ] || continue
+    [ -x "$candidate" ] || continue
+    path_is_under_target_home "$candidate" && continue
+
+    if has_node24_bin "$candidate"; then
+      SERVICE_NODE_BIN="$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+install_system_node24() {
+  if command -v apt-get >/dev/null 2>&1; then
+    log "Installing system Node.js 24 from NodeSource"
+    curl -fsSL https://deb.nodesource.com/setup_24.x -o "$TMP_DIR/nodesource_setup.sh"
+    run_root bash "$TMP_DIR/nodesource_setup.sh"
+    run_root apt-get install -y nodejs
+    return
+  fi
+
+  if command -v dnf >/dev/null 2>&1; then
+    log "Installing system Node.js 24 from NodeSource"
+    curl -fsSL https://rpm.nodesource.com/setup_24.x -o "$TMP_DIR/nodesource_setup.sh"
+    run_root bash "$TMP_DIR/nodesource_setup.sh"
+    run_root dnf install -y nodejs
+    return
+  fi
+
+  if command -v yum >/dev/null 2>&1; then
+    log "Installing system Node.js 24 from NodeSource"
+    curl -fsSL https://rpm.nodesource.com/setup_24.x -o "$TMP_DIR/nodesource_setup.sh"
+    run_root bash "$TMP_DIR/nodesource_setup.sh"
+    run_root yum install -y nodejs
+    return
+  fi
+
+  if command -v apk >/dev/null 2>&1; then
+    log "Installing system Node.js with apk"
+    run_root apk add --no-cache nodejs npm
+    return
+  fi
+
+  if command -v pacman >/dev/null 2>&1; then
+    log "Installing system Node.js with pacman"
+    run_root pacman -Sy --needed --noconfirm nodejs npm
+    return
+  fi
+
+  if command -v zypper >/dev/null 2>&1; then
+    log "Installing system Node.js 24 with zypper"
+    run_root zypper --non-interactive install nodejs24
+    return
+  fi
+
+  fail "unable to install a system Node.js automatically. Install Node.js 24 outside your home directory, then rerun this installer."
 }
 
 install_prerequisites() {
@@ -365,6 +449,21 @@ ensure_prerequisites() {
   command -v tmux >/dev/null 2>&1 || fail "tmux is required"
   has_node24 || fail "Node.js 24 or newer is required. Current version: $(node --version 2>/dev/null || printf 'not installed')"
   resolve_node_bin
+
+  if [ "$INSTALL_SERVICE" -eq 1 ] && supports_systemd; then
+    if ! find_service_node_bin; then
+      warn "Node.js 24 is available only from a user-home path: $NODE_BIN"
+      warn "Fedora systemd/SELinux may refuse to execute binaries from user-home paths."
+      if confirm "Install a system Node.js 24 for the Telemux service? sudo may ask for your password." "yes"; then
+        install_system_node24
+      else
+        fail "systemd needs Node.js 24 installed outside $TARGET_HOME"
+      fi
+    fi
+
+    find_service_node_bin || fail "unable to find a system Node.js 24 outside $TARGET_HOME"
+    NODE_BIN="$SERVICE_NODE_BIN"
+  fi
 }
 
 sha256_file() {

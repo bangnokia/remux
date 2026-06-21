@@ -66,6 +66,7 @@ The installer:
 - Installs the CLI into `~/.telemux`.
 - Adds `~/.local/bin/telemux` and `~/.local/bin/telemux-server` command wrappers.
 - Creates and starts a `telemux` systemd service when systemd is available.
+- Uses a system Node.js path for systemd, installing Node.js 24 if Node is only available from a user-home tool such as `fnm`.
 
 It may ask for your sudo password when packages or the systemd service need root access.
 
