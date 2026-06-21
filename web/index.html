@@ -45,8 +45,7 @@
               <button class="copy-button" type="button" data-copy-target="install-command" aria-label="Copy install command">Copy</button>
             </div>
             <p class="install-note">
-              Installs prerequisites where possible, verifies the release checksum, and creates a systemd service when available.
-              Sudo may ask for your password.
+              Uses your installed Node 24, verifies the release checksum, and creates a user systemd service when available.
             </p>
           </div>
 
@@ -70,7 +69,7 @@
           <pre><code>$ curl -fsSL https://raw.githubusercontent.com/bangnokia/telemux/main/web/install.sh | bash
 ==&gt; Preparing Telemux for user alex
 ==&gt; Downloading latest Telemux server
-==&gt; Installing systemd service telemux
+==&gt; Installing user systemd service telemux
 
 Telemux server 0.1.7 is ready.
 
@@ -96,7 +95,7 @@ Use these values in the app:
           <article class="step-card">
             <span class="step-number">02</span>
             <h3>Run it on your private network</h3>
-            <p>On systemd hosts, the installer starts a <code>telemux</code> service on <code>0.0.0.0:14441</code>. Do not expose a no-auth server publicly.</p>
+            <p>On systemd hosts, the installer starts a user <code>telemux</code> service on <code>0.0.0.0:14441</code>. Do not expose a no-auth server publicly.</p>
           </article>
           <article class="step-card">
             <span class="step-number">03</span>
@@ -113,11 +112,11 @@ Use these values in the app:
         </div>
         <div class="service-grid">
           <p>
-            The server CLI is a single Node 24 executable. The installer writes a systemd service when available, then restarts it
+            The server CLI is a single Node 24 executable. The installer writes a user systemd service when available, then restarts it
             after future installer runs so config changes take effect.
           </p>
           <div class="mini-command">
-            <code>sudo systemctl status telemux<br />journalctl -u telemux -f</code>
+            <code>systemctl --user status telemux<br />journalctl --user -u telemux -f</code>
           </div>
         </div>
       </section>

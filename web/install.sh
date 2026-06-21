@@ -14,7 +14,6 @@ INSTALL_SERVICE=1
 START_SERVICE=1
 ASSUME_YES="${TELEMUX_YES:-0}"
 NODE_BIN=""
-SERVICE_NODE_BIN=""
 
 if [ -n "$TOKEN" ]; then
   AUTH_MODE="token"
@@ -218,6 +217,8 @@ fi
 TARGET_HOME="$(user_home "$TARGET_USER")"
 [ -n "$TARGET_HOME" ] || fail "unable to determine home directory for $TARGET_USER"
 TARGET_GROUP="$(id -gn "$TARGET_USER" 2>/dev/null || printf '%s' "$TARGET_USER")"
+TARGET_UID="$(id -u "$TARGET_USER")"
+USER_SYSTEMD_DIR="$TARGET_HOME/.config/systemd/user"
 
 if [ -z "$INSTALL_DIR" ]; then
   INSTALL_DIR="$TARGET_HOME/.telemux"
@@ -253,27 +254,17 @@ run_root() {
   sudo "$@"
 }
 
-node_major_for_bin() {
-  local bin="$1"
-
-  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+node_major() {
+  if ! command -v node >/dev/null 2>&1; then
     printf '0'
     return
   fi
 
-  "$bin" -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || printf '0'
-}
-
-node_major() {
-  node_major_for_bin "$(command -v node 2>/dev/null || true)"
+  node -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || printf '0'
 }
 
 has_node24() {
   [ "$(node_major)" -ge 24 ]
-}
-
-has_node24_bin() {
-  [ "$(node_major_for_bin "$1")" -ge 24 ]
 }
 
 resolve_node_bin() {
@@ -286,135 +277,41 @@ resolve_node_bin() {
   esac
 }
 
-path_is_under_target_home() {
-  case "$1" in
-    "$TARGET_HOME"|"$TARGET_HOME"/*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-find_service_node_bin() {
-  local candidate=""
-  local command_node=""
-
-  command_node="$(command -v node 2>/dev/null || true)"
-
-  for candidate in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node "$command_node"; do
-    [ -n "$candidate" ] || continue
-    [ -x "$candidate" ] || continue
-    path_is_under_target_home "$candidate" && continue
-
-    if has_node24_bin "$candidate"; then
-      SERVICE_NODE_BIN="$candidate"
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-install_system_node24() {
-  if command -v apt-get >/dev/null 2>&1; then
-    log "Installing system Node.js 24 from NodeSource"
-    curl -fsSL https://deb.nodesource.com/setup_24.x -o "$TMP_DIR/nodesource_setup.sh"
-    run_root bash "$TMP_DIR/nodesource_setup.sh"
-    run_root apt-get install -y nodejs
-    return
-  fi
-
-  if command -v dnf >/dev/null 2>&1; then
-    log "Installing system Node.js 24 from NodeSource"
-    curl -fsSL https://rpm.nodesource.com/setup_24.x -o "$TMP_DIR/nodesource_setup.sh"
-    run_root bash "$TMP_DIR/nodesource_setup.sh"
-    run_root dnf install -y nodejs
-    return
-  fi
-
-  if command -v yum >/dev/null 2>&1; then
-    log "Installing system Node.js 24 from NodeSource"
-    curl -fsSL https://rpm.nodesource.com/setup_24.x -o "$TMP_DIR/nodesource_setup.sh"
-    run_root bash "$TMP_DIR/nodesource_setup.sh"
-    run_root yum install -y nodejs
-    return
-  fi
-
-  if command -v apk >/dev/null 2>&1; then
-    log "Installing system Node.js with apk"
-    run_root apk add --no-cache nodejs npm
-    return
-  fi
-
-  if command -v pacman >/dev/null 2>&1; then
-    log "Installing system Node.js with pacman"
-    run_root pacman -Sy --needed --noconfirm nodejs npm
-    return
-  fi
-
-  if command -v zypper >/dev/null 2>&1; then
-    log "Installing system Node.js 24 with zypper"
-    run_root zypper --non-interactive install nodejs24
-    return
-  fi
-
-  fail "unable to install a system Node.js automatically. Install Node.js 24 outside your home directory, then rerun this installer."
-}
-
 install_prerequisites() {
   if command -v apt-get >/dev/null 2>&1; then
     log "Installing base packages with apt"
     run_root apt-get update
     run_root apt-get install -y ca-certificates curl tar gzip tmux
-
-    if ! has_node24; then
-      log "Installing Node.js 24 from NodeSource"
-      curl -fsSL https://deb.nodesource.com/setup_24.x -o "$TMP_DIR/nodesource_setup.sh"
-      run_root bash "$TMP_DIR/nodesource_setup.sh"
-      run_root apt-get install -y nodejs
-    fi
     return
   fi
 
   if command -v dnf >/dev/null 2>&1; then
     log "Installing base packages with dnf"
     run_root dnf install -y ca-certificates curl tar gzip tmux
-
-    if ! has_node24; then
-      log "Installing Node.js 24 from NodeSource"
-      curl -fsSL https://rpm.nodesource.com/setup_24.x -o "$TMP_DIR/nodesource_setup.sh"
-      run_root bash "$TMP_DIR/nodesource_setup.sh"
-      run_root dnf install -y nodejs
-    fi
     return
   fi
 
   if command -v yum >/dev/null 2>&1; then
     log "Installing base packages with yum"
     run_root yum install -y ca-certificates curl tar gzip tmux
-
-    if ! has_node24; then
-      log "Installing Node.js 24 from NodeSource"
-      curl -fsSL https://rpm.nodesource.com/setup_24.x -o "$TMP_DIR/nodesource_setup.sh"
-      run_root bash "$TMP_DIR/nodesource_setup.sh"
-      run_root yum install -y nodejs
-    fi
     return
   fi
 
   if command -v apk >/dev/null 2>&1; then
     log "Installing base packages with apk"
-    run_root apk add --no-cache ca-certificates curl tar gzip tmux nodejs npm
+    run_root apk add --no-cache ca-certificates curl tar gzip tmux
     return
   fi
 
   if command -v pacman >/dev/null 2>&1; then
     log "Installing base packages with pacman"
-    run_root pacman -Sy --needed --noconfirm ca-certificates curl tar gzip tmux nodejs npm
+    run_root pacman -Sy --needed --noconfirm ca-certificates curl tar gzip tmux
     return
   fi
 
   if command -v zypper >/dev/null 2>&1; then
     log "Installing base packages with zypper"
-    run_root zypper --non-interactive install ca-certificates curl tar gzip tmux nodejs24
+    run_root zypper --non-interactive install ca-certificates curl tar gzip tmux
     return
   fi
 
@@ -428,42 +325,26 @@ install_prerequisites() {
 }
 
 ensure_prerequisites() {
-  local missing=""
+  local missing_base=""
 
-  command -v curl >/dev/null 2>&1 || missing="$missing curl"
-  command -v tar >/dev/null 2>&1 || missing="$missing tar"
-  command -v tmux >/dev/null 2>&1 || missing="$missing tmux"
-  has_node24 || missing="$missing nodejs24"
+  command -v curl >/dev/null 2>&1 || missing_base="$missing_base curl"
+  command -v tar >/dev/null 2>&1 || missing_base="$missing_base tar"
+  command -v tmux >/dev/null 2>&1 || missing_base="$missing_base tmux"
 
-  if [ -n "$missing" ]; then
-    warn "missing prerequisites:$missing"
-    if confirm "Install missing prerequisites now? sudo may ask for your password." "yes"; then
+  if [ -n "$missing_base" ]; then
+    warn "missing base packages:$missing_base"
+    if confirm "Install missing base packages now? sudo may ask for your password." "yes"; then
       install_prerequisites
     else
-      fail "missing prerequisites:$missing"
+      fail "missing base packages:$missing_base"
     fi
   fi
 
   command -v curl >/dev/null 2>&1 || fail "curl is required"
   command -v tar >/dev/null 2>&1 || fail "tar is required"
   command -v tmux >/dev/null 2>&1 || fail "tmux is required"
-  has_node24 || fail "Node.js 24 or newer is required. Current version: $(node --version 2>/dev/null || printf 'not installed')"
+  has_node24 || fail "Node.js 24 or newer is required. Install it with your preferred Node manager, then rerun this installer. Current version: $(node --version 2>/dev/null || printf 'not installed')"
   resolve_node_bin
-
-  if [ "$INSTALL_SERVICE" -eq 1 ] && supports_systemd; then
-    if ! find_service_node_bin; then
-      warn "Node.js 24 is available only from a user-home path: $NODE_BIN"
-      warn "Fedora systemd/SELinux may refuse to execute binaries from user-home paths."
-      if confirm "Install a system Node.js 24 for the Telemux service? sudo may ask for your password." "yes"; then
-        install_system_node24
-      else
-        fail "systemd needs Node.js 24 installed outside $TARGET_HOME"
-      fi
-    fi
-
-    find_service_node_bin || fail "unable to find a system Node.js 24 outside $TARGET_HOME"
-    NODE_BIN="$SERVICE_NODE_BIN"
-  fi
 }
 
 sha256_file() {
@@ -571,7 +452,7 @@ shell_quote() {
 }
 
 supports_systemd() {
-  [ "$(uname -s)" = "Linux" ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+  [ "$(uname -s)" = "Linux" ] && command -v systemctl >/dev/null 2>&1
 }
 
 path_includes_bin_dir() {
@@ -579,6 +460,32 @@ path_includes_bin_dir() {
     *":$BIN_DIR:"*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+run_user_systemctl() {
+  local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$TARGET_UID}"
+
+  [ -d "$runtime_dir" ] || fail "user systemd runtime is not available at $runtime_dir. Log in as $TARGET_USER and rerun, or use --no-service."
+
+  if [ "$(id -un)" = "$TARGET_USER" ]; then
+    XDG_RUNTIME_DIR="$runtime_dir" systemctl --user "$@"
+    return
+  fi
+
+  command -v sudo >/dev/null 2>&1 || fail "sudo is required to manage $TARGET_USER's user service from this shell"
+  sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$runtime_dir" systemctl --user "$@"
+}
+
+disable_legacy_system_service() {
+  local system_service="/etc/systemd/system/${SERVICE_NAME}.service"
+
+  [ -f "$system_service" ] || return 0
+
+  log "Disabling old root systemd service $SERVICE_NAME"
+  run_root systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+  run_root rm -f "$system_service"
+  run_root systemctl daemon-reload
+  run_root systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
 }
 
 write_systemd_service() {
@@ -598,12 +505,9 @@ write_systemd_service() {
   cat > "$service_file" <<EOF
 [Unit]
 Description=Telemux tmux server
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=simple
-User=$TARGET_USER
 WorkingDirectory=$TARGET_HOME
 Environment="TELEMUX_HOST=$escaped_host"
 Environment="TELEMUX_PORT=$escaped_port"
@@ -613,16 +517,25 @@ Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 EOF
 
-  log "Installing systemd service $SERVICE_NAME"
-  run_root cp "$service_file" "/etc/systemd/system/${SERVICE_NAME}.service"
-  run_root systemctl daemon-reload
-  run_root systemctl enable "$SERVICE_NAME"
+  disable_legacy_system_service
+
+  log "Installing user systemd service $SERVICE_NAME"
+  if [ "$(id -u)" -eq 0 ]; then
+    install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_GROUP" "$USER_SYSTEMD_DIR"
+    install -m 0644 -o "$TARGET_USER" -g "$TARGET_GROUP" "$service_file" "$USER_SYSTEMD_DIR/${SERVICE_NAME}.service"
+  else
+    mkdir -p "$USER_SYSTEMD_DIR"
+    install -m 0644 "$service_file" "$USER_SYSTEMD_DIR/${SERVICE_NAME}.service"
+  fi
+
+  run_user_systemctl daemon-reload
+  run_user_systemctl enable "$SERVICE_NAME"
 
   if [ "$START_SERVICE" -eq 1 ]; then
-    run_root systemctl restart "$SERVICE_NAME"
+    run_user_systemctl restart "$SERVICE_NAME"
   fi
 }
 
@@ -710,8 +623,8 @@ print_summary() {
   fi
 
   if [ "$INSTALL_SERVICE" -eq 1 ] && supports_systemd; then
-    useful_commands="  sudo systemctl status $SERVICE_NAME
-  journalctl -u $SERVICE_NAME -f
+    useful_commands="  systemctl --user status $SERVICE_NAME
+  journalctl --user -u $SERVICE_NAME -f
   telemux update"
   else
     useful_commands="  $manual_start_command
@@ -773,14 +686,14 @@ main() {
 
   if [ "$INSTALL_SERVICE" -eq 1 ]; then
     if supports_systemd; then
-      if confirm "Install and configure a systemd service? sudo may ask for your password." "yes"; then
+      if confirm "Install and configure a user systemd service?" "yes"; then
         write_systemd_service
         if [ "$START_SERVICE" -eq 1 ]; then
           if check_health; then
             log "Telemux health check passed"
           else
             warn "Telemux service did not pass the local health check yet"
-            warn "Run: sudo systemctl status $SERVICE_NAME"
+            warn "Run: systemctl --user status $SERVICE_NAME"
           fi
         fi
       else

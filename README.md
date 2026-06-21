@@ -5,7 +5,7 @@ Telemux is a self-hosted tmux controller for resuming terminal work from web, iO
 ## What You Need
 
 - A server or laptop that can run `tmux`.
-- Node.js 24 or newer on the server. The installer can set this up automatically on common Linux distributions.
+- Node.js 24 or newer on the server.
 - Network reachability from the phone to the server. Tailscale, WireGuard, or another private VPN is recommended.
 - The Android APK and server CLI assets from the latest GitHub Release. iOS IPA assets are published when the repository has EAS credentials configured.
 
@@ -60,15 +60,14 @@ curl -fsSL https://raw.githubusercontent.com/bangnokia/telemux/main/web/install.
 
 The installer:
 
-- Installs `tmux`, `curl`, `tar`, and Node.js 24 where possible.
+- Installs `tmux`, `curl`, and `tar` where possible.
 - Downloads the latest `telemux-server-node24.tar.gz` release asset.
 - Verifies the release SHA-256 checksum.
 - Installs the CLI into `~/.telemux`.
 - Adds `~/.local/bin/telemux` and `~/.local/bin/telemux-server` command wrappers.
-- Creates and starts a `telemux` systemd service when systemd is available.
-- Uses a system Node.js path for systemd, installing Node.js 24 if Node is only available from a user-home tool such as `fnm`.
+- Creates and starts a user `telemux` systemd service when systemd is available.
 
-It may ask for your sudo password when packages or the systemd service need root access.
+It uses the `node` already on the installing user's `PATH`, including user-installed Node managers such as `fnm`. It may ask for your sudo password when base packages need root access or when removing an older root systemd service from a previous installer version.
 
 The default service binds to `0.0.0.0:14441` with blank auth because the current mobile app sends blank auth. Keep it behind Tailscale, WireGuard, or another trusted private network. Do not expose a blank-auth Telemux server on the public internet.
 
@@ -84,7 +83,7 @@ Custom port:
 curl -fsSL https://raw.githubusercontent.com/bangnokia/telemux/main/web/install.sh | bash -s -- --port 14441 --no-auth
 ```
 
-Install without creating a systemd service:
+Install without creating a user systemd service:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bangnokia/telemux/main/web/install.sh | bash -s -- --no-service
@@ -144,17 +143,17 @@ telemux
 
 ### Service Management
 
-When systemd is available, the installer creates `/etc/systemd/system/telemux.service` and starts it automatically. Check it with:
+When systemd is available, the installer creates `~/.config/systemd/user/telemux.service` and starts it automatically. Check it with:
 
 ```bash
-sudo systemctl status telemux
+systemctl --user status telemux
 ```
 
 View logs or restart after changing config:
 
 ```bash
-journalctl -u telemux -f
-sudo systemctl restart telemux
+journalctl --user -u telemux -f
+systemctl --user restart telemux
 ```
 
 ## Android Setup
