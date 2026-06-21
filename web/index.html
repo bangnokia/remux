@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Telemux is a self-hosted tmux controller for resuming terminal work from Android, iOS, and web clients."
+    />
+    <title>Telemux</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="Telemux home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Telemux</span>
+      </a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="#install">Install</a>
+        <a href="https://github.com/bangnokia/telemux/releases/latest">Releases</a>
+        <a class="nav-button" href="https://github.com/bangnokia/telemux">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Self-hosted tmux for your private network</p>
+          <h1 id="hero-title">Telemux</h1>
+          <p class="hero-subtitle">
+            Run one small server on your machine, connect through Tailscale or your VPN, and resume tmux panes from your phone.
+          </p>
+
+          <div id="install" class="install-panel" aria-label="Quick install">
+            <div class="install-heading">
+              <div>
+                <p class="panel-kicker">Server quick install</p>
+                <h2>Install the CLI</h2>
+              </div>
+              <a class="release-link" href="https://github.com/bangnokia/telemux/releases/latest">Latest release</a>
+            </div>
+            <div class="command-row">
+              <code id="install-command">curl -fsSL https://raw.githubusercontent.com/bangnokia/telemux/main/web/install.sh | bash</code>
+              <button class="copy-button" type="button" data-copy-target="install-command" aria-label="Copy install command">Copy</button>
+            </div>
+            <p class="install-note">
+              Installs prerequisites where possible, verifies the release checksum, and creates a systemd service when available.
+              Sudo may ask for your password.
+            </p>
+          </div>
+
+          <div class="hero-actions">
+            <a class="primary-action" href="https://github.com/bangnokia/telemux/releases/latest/download/telemux-android-release.apk">
+              Download Android APK
+            </a>
+            <a class="secondary-action" href="https://github.com/bangnokia/telemux">
+              View source
+            </a>
+          </div>
+        </div>
+
+        <aside class="terminal-preview" aria-label="Telemux terminal preview">
+          <div class="terminal-toolbar">
+            <span></span>
+            <span></span>
+            <span></span>
+            <p>telemux-server</p>
+          </div>
+          <pre><code>$ curl -fsSL https://raw.githubusercontent.com/bangnokia/telemux/main/web/install.sh | bash
+==&gt; Preparing Telemux for user alex
+==&gt; Downloading latest Telemux server
+==&gt; Installing systemd service telemux
+
+Telemux server 0.1.7 is ready.
+
+Use these values in the app:
+  Host: 100.x.y.z
+  Port: 14441
+  Auth: blank</code></pre>
+        </aside>
+      </section>
+
+      <section class="steps" aria-labelledby="steps-title">
+        <div class="section-heading">
+          <p class="panel-kicker">Setup path</p>
+          <h2 id="steps-title">From server to phone</h2>
+        </div>
+
+        <div class="step-grid">
+          <article class="step-card">
+            <span class="step-number">01</span>
+            <h3>Install on the machine with tmux</h3>
+            <p>The install command downloads the latest server CLI from GitHub Releases into <code>~/telemux</code> and checks the SHA-256.</p>
+          </article>
+          <article class="step-card">
+            <span class="step-number">02</span>
+            <h3>Run it on your private network</h3>
+            <p>On systemd hosts, the installer starts a <code>telemux</code> service on <code>0.0.0.0:14441</code>. Do not expose a no-auth server publicly.</p>
+          </article>
+          <article class="step-card">
+            <span class="step-number">03</span>
+            <h3>Connect from the app</h3>
+            <p>Use the server Tailscale IP as the host and keep the port at <code>14441</code> unless you changed it.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="service-section" aria-labelledby="service-title">
+        <div class="section-heading">
+          <p class="panel-kicker">Keep it running</p>
+          <h2 id="service-title">systemd service</h2>
+        </div>
+        <div class="service-grid">
+          <p>
+            The server CLI is a single Node 24 executable. The installer writes a systemd service when available, then restarts it
+            after future installer runs so config changes take effect.
+          </p>
+          <div class="mini-command">
+            <code>sudo systemctl status telemux<br />journalctl -u telemux -f</code>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>Telemux is open source.</p>
+      <a href="https://github.com/bangnokia/telemux">github.com/bangnokia/telemux</a>
+    </footer>
+
+    <script>
+      for (const button of document.querySelectorAll("[data-copy-target]")) {
+        button.addEventListener("click", async () => {
+          const target = document.getElementById(button.dataset.copyTarget);
+          const text = target ? target.textContent.trim() : "";
+          if (!text) return;
+
+          try {
+            await navigator.clipboard.writeText(text);
+            const original = button.textContent;
+            button.textContent = "Copied";
+            setTimeout(() => {
+              button.textContent = original;
+            }, 1400);
+          } catch {
+            button.textContent = "Copy failed";
+          }
+        });
+      }
+    </script>
+  </body>
+</html>
