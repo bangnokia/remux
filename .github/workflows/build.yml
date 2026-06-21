@@ -4,17 +4,34 @@ on:
   push:
     tags:
       - "*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach mobile assets to, for example v0.1.8"
+        required: true
+        type: string
+      build_android:
+        description: "Build and upload Android APK"
+        required: true
+        default: true
+        type: boolean
+      build_ios:
+        description: "Build and upload iOS IPA with EAS"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  group: telemux-build-${{ github.ref }}
+  group: telemux-build-${{ github.event_name }}-${{ github.ref_name }}-${{ inputs.tag }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build APK and Server CLI
+  server:
+    if: github.event_name == 'push'
+    name: Build Server CLI
     runs-on: ubuntu-latest
     env:
       CI: "1"
@@ -34,7 +51,88 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Build standalone server CLI
+        run: pnpm run build:server:standalone
+
+      - name: Smoke test server CLI
+        run: |
+          node dist/telemux-server.mjs --help
+          node dist/telemux-server.mjs --version
+
+      - name: Package server CLI
+        run: |
+          tar -czf dist/telemux-server-node24.tar.gz -C dist telemux-server.mjs
+          sha256sum dist/telemux-server-node24.tar.gz > dist/telemux-server-node24.tar.gz.sha256
+
+      - name: Write release notes
+        run: |
+          cat > dist/release-notes.md <<EOF
+          Automated Telemux server build for ${GITHUB_REF_NAME} from commit ${GITHUB_SHA}.
+
+          Assets:
+          - telemux-server-node24.tar.gz
+          - telemux-server-node24.tar.gz.sha256
+
+          Mobile assets are built only when the manual mobile release workflow is run for this tag.
+          EOF
+
+      - name: Publish server release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          RELEASE_TITLE="Telemux ${RELEASE_TAG}"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes-file dist/release-notes.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes-file dist/release-notes.md
+          fi
+
+          gh release upload "$RELEASE_TAG" \
+            dist/telemux-server-node24.tar.gz \
+            dist/telemux-server-node24.tar.gz.sha256 \
+            --clobber
+
+  mobile:
+    if: github.event_name == 'workflow_dispatch'
+    name: Build Mobile Assets
+    runs-on: ubuntu-latest
+    env:
+      CI: "1"
+      BUILD_ANDROID: ${{ inputs.build_android }}
+      BUILD_IOS: ${{ inputs.build_ios }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
       - name: Setup Java
+        if: inputs.build_android
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -46,21 +144,12 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
-      - name: Build standalone server CLI
-        run: pnpm run build:server:standalone
-
-      - name: Smoke test server CLI
-        run: node dist/telemux-server.mjs --help
-
-      - name: Package server CLI
-        run: |
-          tar -czf dist/telemux-server-node24.tar.gz -C dist telemux-server.mjs
-          sha256sum dist/telemux-server-node24.tar.gz > dist/telemux-server-node24.tar.gz.sha256
-
       - name: Prebuild Android project
+        if: inputs.build_android
         run: pnpm --filter @telemux/client run prebuild:android
 
       - name: Tune Gradle
+        if: inputs.build_android
         run: |
           sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8/' apps/client/android/gradle.properties
           if grep -q '^org.gradle.parallel=' apps/client/android/gradle.properties; then
@@ -75,6 +164,7 @@ jobs:
           fi
 
       - name: Build release APK
+        if: inputs.build_android
         working-directory: apps/client/android
         env:
           NODE_ENV: production
@@ -83,6 +173,7 @@ jobs:
           ./gradlew :app:assembleRelease --no-daemon
 
       - name: Collect APK
+        if: inputs.build_android
         run: |
           mkdir -p dist/android
           APK_PATH="$(find apps/client/android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
@@ -94,12 +185,13 @@ jobs:
           sha256sum dist/android/telemux-android-release.apk > dist/android/telemux-android-release.apk.sha256
 
       - name: Build iOS IPA with EAS
+        if: inputs.build_ios
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           if [ -z "${EXPO_TOKEN:-}" ]; then
-            echo "EXPO_TOKEN is not configured; skipping iOS IPA build."
-            exit 0
+            echo "EXPO_TOKEN is not configured; cannot build iOS IPA."
+            exit 1
           fi
 
           mkdir -p dist/ios
@@ -136,60 +228,37 @@ jobs:
           curl -fL "$(cat dist/eas-ios-build-url.txt)" -o dist/ios/telemux-ios-release.ipa
           sha256sum dist/ios/telemux-ios-release.ipa > dist/ios/telemux-ios-release.ipa.sha256
 
-      - name: Write release notes
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        run: |
-          cat > dist/release-notes.md <<EOF
-          Automated Telemux build for ${GITHUB_REF_NAME} from commit ${GITHUB_SHA}.
-
-          Assets:
-          - telemux-android-release.apk
-          - telemux-android-release.apk.sha256
-          - telemux-server-node24.tar.gz
-          - telemux-server-node24.tar.gz.sha256
-          EOF
-          if [ -f dist/ios/telemux-ios-release.ipa ]; then
-            cat >> dist/release-notes.md <<EOF
-          - telemux-ios-release.ipa
-          - telemux-ios-release.ipa.sha256
-          EOF
-          else
-            cat >> dist/release-notes.md <<EOF
-
-          iOS IPA was skipped because EXPO_TOKEN was not configured for this repository.
-          EOF
-          fi
-
-      - name: Publish release assets
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      - name: Publish mobile release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RELEASE_TAG="${GITHUB_REF_NAME}"
           RELEASE_TITLE="Telemux ${RELEASE_TAG}"
 
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" \
-              --title "$RELEASE_TITLE" \
-              --notes-file dist/release-notes.md
-          else
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
               --title "$RELEASE_TITLE" \
-              --notes-file dist/release-notes.md
+              --notes "Manual Telemux mobile asset build for ${RELEASE_TAG}."
           fi
 
-          ASSETS=(
-            dist/android/telemux-android-release.apk
-            dist/android/telemux-android-release.apk.sha256
-            dist/telemux-server-node24.tar.gz
-            dist/telemux-server-node24.tar.gz.sha256
-          )
+          ASSETS=()
+
+          if [ -f dist/android/telemux-android-release.apk ]; then
+            ASSETS+=(
+              dist/android/telemux-android-release.apk
+              dist/android/telemux-android-release.apk.sha256
+            )
+          fi
 
           if [ -f dist/ios/telemux-ios-release.ipa ]; then
             ASSETS+=(
               dist/ios/telemux-ios-release.ipa
               dist/ios/telemux-ios-release.ipa.sha256
             )
+          fi
+
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "No mobile assets were built."
+            exit 1
           fi
 
           gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --clobber
