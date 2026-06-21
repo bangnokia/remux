@@ -154,8 +154,8 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     }
 
     if (message.type === "snapshot") {
+      fitTerminal();
       terminal?.reset();
-      terminal?.resize(message.cols, message.rows);
       terminal?.write(message.data);
       window.setTimeout(() => fitTerminal(), 0);
     } else if (message.type === "output") {

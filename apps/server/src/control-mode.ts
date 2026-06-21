@@ -136,8 +136,8 @@ export class TerminalBridge {
       type: "snapshot",
       paneId: this.paneId,
       data: formatSnapshotForTerminal(data, size.cursorX, size.cursorY),
-      cols: size.cols,
-      rows: size.rows
+      cols: this.clientCols ?? size.cols,
+      rows: this.clientRows ?? size.rows
     });
   }
 

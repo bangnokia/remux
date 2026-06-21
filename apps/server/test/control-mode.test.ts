@@ -3,6 +3,7 @@ import {
   decodeTmuxOutput,
   formatSnapshotForTerminal,
   stripTerminalStringControls,
+  TerminalBridge,
   TerminalOutputSanitizer
 } from "../src/control-mode.js";
 
@@ -63,5 +64,41 @@ describe("formatSnapshotForTerminal", () => {
 
   it("removes the final capture newline so the snapshot does not scroll before cursor placement", () => {
     expect(formatSnapshotForTerminal("line 1\nprompt\n", 6, 1)).toBe("line 1\nprompt\u001b[2;7H");
+  });
+});
+
+describe("TerminalBridge snapshots", () => {
+  it("reports the WebSocket viewport size when one has been received", async () => {
+    const sentMessages: unknown[] = [];
+    const socket = {
+      OPEN: 1,
+      readyState: 1,
+      send(data: string) {
+        sentMessages.push(JSON.parse(data));
+      }
+    };
+    const bridge = new TerminalBridge(
+      socket as never,
+      {
+        capturePane: async () => "prompt\n",
+        paneSize: async () => ({ cols: 160, rows: 48, cursorX: 6, cursorY: 0 })
+      } as never,
+      { updatePreferences: () => undefined } as never,
+      { paneId: "%1", sessionId: "$1" }
+    );
+
+    bridge["clientCols"] = 44;
+    bridge["clientRows"] = 16;
+    await bridge["sendSnapshot"]();
+
+    expect(sentMessages).toEqual([
+      {
+        type: "snapshot",
+        paneId: "%1",
+        data: "prompt\u001b[1;7H",
+        cols: 44,
+        rows: 16
+      }
+    ]);
   });
 });

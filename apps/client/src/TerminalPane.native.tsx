@@ -276,16 +276,11 @@ function terminalHtml(wsUrl: string): string {
       socket.onmessage = (event) => {
         const message = JSON.parse(event.data);
         if (message.type === 'snapshot') {
-          const hasNativeViewport = Boolean(nativeViewportWidth && nativeViewportHeight);
+          window.telemuxFit();
           term.reset();
-          if (!hasNativeViewport) {
-            term.resize(message.cols, message.rows);
-          }
           term.write(message.data);
           scrollTerminalToBottom();
-          if (!hasNativeViewport) {
-            scheduleFit();
-          }
+          scheduleFit();
         } else if (message.type === 'output') {
           term.write(message.data);
           scrollAfterRecentInput();
