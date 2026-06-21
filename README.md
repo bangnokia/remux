@@ -63,8 +63,8 @@ The installer:
 - Installs `tmux`, `curl`, `tar`, and Node.js 24 where possible.
 - Downloads the latest `telemux-server-node24.tar.gz` release asset.
 - Verifies the release SHA-256 checksum.
-- Installs the CLI into `~/telemux`.
-- Adds a `~/.local/bin/telemux-server` symlink.
+- Installs the CLI into `~/.telemux`.
+- Adds `~/.local/bin/telemux` and `~/.local/bin/telemux-server` command wrappers.
 - Creates and starts a `telemux` systemd service when systemd is available.
 
 It may ask for your sudo password when packages or the systemd service need root access.
@@ -115,10 +115,10 @@ The standalone CLI accepts these options:
 The CLI also supports a self-update command:
 
 ```bash
-~/telemux/telemux-server.mjs update
+telemux update
 ```
 
-`update` checks the latest GitHub Release, downloads `telemux-server-node24.tar.gz`, and replaces the current `telemux-server.mjs` file when a newer version exists. Restart the service after updating if Telemux is running under systemd.
+`update` checks the latest GitHub Release, downloads `telemux-server-node24.tar.gz`, and replaces the installed `~/.telemux/telemux-server.mjs` file when a newer version exists. Restart the service after updating if Telemux is running under systemd.
 
 The same config can be set with environment variables:
 
@@ -138,7 +138,7 @@ Example with environment variables:
 TELEMUX_HOST=0.0.0.0 \
 TELEMUX_PORT=14441 \
 TELEMUX_TOKEN=change-this-token \
-~/telemux/telemux-server.mjs
+telemux
 ```
 
 ### Service Management

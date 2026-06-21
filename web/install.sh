@@ -13,6 +13,7 @@ AUTH_MODE="no-auth"
 INSTALL_SERVICE=1
 START_SERVICE=1
 ASSUME_YES="${TELEMUX_YES:-0}"
+NODE_BIN=""
 
 if [ -n "$TOKEN" ]; then
   AUTH_MODE="token"
@@ -28,8 +29,8 @@ Usage:
 Options:
   -y, --yes                Accept defaults for installer prompts.
   --repo <owner/repo>      GitHub repo to download from. Default: bangnokia/telemux
-  --install-dir <path>     Install directory. Default: ~/telemux
-  --bin-dir <path>         Symlink directory. Default: ~/.local/bin
+  --install-dir <path>     Install directory. Default: ~/.telemux
+  --bin-dir <path>         Command directory. Default: ~/.local/bin
   --host <host>            Host for the service to bind. Default: 0.0.0.0
   --port <port>            Port for the service to bind. Default: 14441
   --token <token>          Require bearer auth with this token.
@@ -218,7 +219,7 @@ TARGET_HOME="$(user_home "$TARGET_USER")"
 TARGET_GROUP="$(id -gn "$TARGET_USER" 2>/dev/null || printf '%s' "$TARGET_USER")"
 
 if [ -z "$INSTALL_DIR" ]; then
-  INSTALL_DIR="$TARGET_HOME/telemux"
+  INSTALL_DIR="$TARGET_HOME/.telemux"
 fi
 
 if [ -z "$BIN_DIR" ]; then
@@ -262,6 +263,16 @@ node_major() {
 
 has_node24() {
   [ "$(node_major)" -ge 24 ]
+}
+
+resolve_node_bin() {
+  NODE_BIN="$(command -v node 2>/dev/null || true)"
+  [ -n "$NODE_BIN" ] || fail "node is required"
+
+  case "$NODE_BIN" in
+    /*) ;;
+    *) fail "node path is not absolute: $NODE_BIN" ;;
+  esac
 }
 
 install_prerequisites() {
@@ -353,6 +364,7 @@ ensure_prerequisites() {
   command -v tar >/dev/null 2>&1 || fail "tar is required"
   command -v tmux >/dev/null 2>&1 || fail "tmux is required"
   has_node24 || fail "Node.js 24 or newer is required. Current version: $(node --version 2>/dev/null || printf 'not installed')"
+  resolve_node_bin
 }
 
 sha256_file() {
@@ -414,13 +426,36 @@ install_server_cli() {
     chmod +x "$INSTALL_DIR/telemux-server.mjs"
   fi
 
+  install_command_wrappers
+}
+
+install_command_wrappers() {
   if [ "$(id -u)" -eq 0 ]; then
     install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_GROUP" "$BIN_DIR"
-    ln -sfn "$INSTALL_DIR/telemux-server.mjs" "$BIN_DIR/telemux-server"
-    chown -h "$TARGET_USER:$TARGET_GROUP" "$BIN_DIR/telemux-server" 2>/dev/null || true
   else
     mkdir -p "$BIN_DIR"
-    ln -sfn "$INSTALL_DIR/telemux-server.mjs" "$BIN_DIR/telemux-server"
+  fi
+
+  write_command_wrapper "telemux"
+  write_command_wrapper "telemux-server"
+}
+
+write_command_wrapper() {
+  local name="$1"
+  local destination="$BIN_DIR/$name"
+  local wrapper="$TMP_DIR/$name"
+
+  cat > "$wrapper" <<EOF
+#!/usr/bin/env sh
+exec $(shell_quote "$NODE_BIN") $(shell_quote "$INSTALL_DIR/telemux-server.mjs") "\$@"
+EOF
+
+  if [ "$(id -u)" -eq 0 ]; then
+    rm -f "$destination"
+    install -m 0755 -o "$TARGET_USER" -g "$TARGET_GROUP" "$wrapper" "$destination"
+  else
+    rm -f "$destination"
+    install -m 0755 "$wrapper" "$destination"
   fi
 }
 
@@ -428,8 +463,23 @@ escape_systemd_env() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g'
 }
 
+quote_systemd_arg() {
+  printf '"%s"' "$(escape_systemd_env "$1")"
+}
+
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 supports_systemd() {
   [ "$(uname -s)" = "Linux" ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+}
+
+path_includes_bin_dir() {
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 write_systemd_service() {
@@ -437,10 +487,14 @@ write_systemd_service() {
   local escaped_host=""
   local escaped_port=""
   local escaped_token=""
+  local quoted_node_bin=""
+  local quoted_server_path=""
 
   escaped_host="$(escape_systemd_env "$SERVICE_HOST")"
   escaped_port="$(escape_systemd_env "$SERVICE_PORT")"
   escaped_token="$(escape_systemd_env "$TOKEN")"
+  quoted_node_bin="$(quote_systemd_arg "$NODE_BIN")"
+  quoted_server_path="$(quote_systemd_arg "$INSTALL_DIR/telemux-server.mjs")"
 
   cat > "$service_file" <<EOF
 [Unit]
@@ -455,7 +509,7 @@ WorkingDirectory=$TARGET_HOME
 Environment="TELEMUX_HOST=$escaped_host"
 Environment="TELEMUX_PORT=$escaped_port"
 Environment="TELEMUX_TOKEN=$escaped_token"
-ExecStart=$INSTALL_DIR/telemux-server.mjs
+ExecStart=$quoted_node_bin $quoted_server_path
 Restart=always
 RestartSec=3
 
@@ -536,7 +590,10 @@ print_summary() {
   local service_state="not installed"
   local auth_line="Auth: blank"
   local manual_start_command=""
+  local quoted_telemux_command=""
   local useful_commands=""
+
+  quoted_telemux_command="$(shell_quote "$BIN_DIR/telemux")"
 
   if [ "$INSTALL_SERVICE" -eq 1 ] && supports_systemd; then
     if [ "$START_SERVICE" -eq 1 ]; then
@@ -548,18 +605,18 @@ print_summary() {
 
   if [ "$AUTH_MODE" = "token" ]; then
     auth_line="Auth token: configured on server"
-    manual_start_command="TELEMUX_TOKEN=your-token $INSTALL_DIR/telemux-server.mjs --host $SERVICE_HOST --port $SERVICE_PORT"
+    manual_start_command="TELEMUX_TOKEN=your-token $quoted_telemux_command --host $SERVICE_HOST --port $SERVICE_PORT"
   else
-    manual_start_command="$INSTALL_DIR/telemux-server.mjs --host $SERVICE_HOST --port $SERVICE_PORT --no-auth"
+    manual_start_command="$quoted_telemux_command --host $SERVICE_HOST --port $SERVICE_PORT --no-auth"
   fi
 
   if [ "$INSTALL_SERVICE" -eq 1 ] && supports_systemd; then
     useful_commands="  sudo systemctl status $SERVICE_NAME
   journalctl -u $SERVICE_NAME -f
-  $INSTALL_DIR/telemux-server.mjs update"
+  telemux update"
   else
     useful_commands="  $manual_start_command
-  $INSTALL_DIR/telemux-server.mjs update"
+  telemux update"
   fi
 
   cat <<EOF
@@ -568,6 +625,7 @@ ${BOLD}Telemux server ${version} is ready.${RESET}
 
 Installed:
   $INSTALL_DIR/telemux-server.mjs
+  $BIN_DIR/telemux
   $BIN_DIR/telemux-server
 
 Service:
@@ -591,6 +649,14 @@ Do not expose this service directly on the public internet.
 
 EOF
   fi
+
+  if ! path_includes_bin_dir; then
+    cat <<EOF
+If your shell cannot find "telemux", add this command directory to PATH:
+  export PATH="$BIN_DIR:\$PATH"
+
+EOF
+  fi
 }
 
 main() {
@@ -604,7 +670,7 @@ main() {
   log "Preparing Telemux for user $TARGET_USER"
   ensure_prerequisites
   install_server_cli
-  version="$("$INSTALL_DIR/telemux-server.mjs" --version)"
+  version="$("$NODE_BIN" "$INSTALL_DIR/telemux-server.mjs" --version)"
 
   if [ "$INSTALL_SERVICE" -eq 1 ]; then
     if supports_systemd; then
@@ -624,7 +690,7 @@ main() {
     else
       INSTALL_SERVICE=0
       warn "systemd was not detected; installed the CLI without a service"
-      warn "Start manually with: $INSTALL_DIR/telemux-server.mjs --host $SERVICE_HOST --port $SERVICE_PORT --no-auth"
+      warn "Start manually with: $(shell_quote "$BIN_DIR/telemux") --host $SERVICE_HOST --port $SERVICE_PORT --no-auth"
     fi
   fi
 
