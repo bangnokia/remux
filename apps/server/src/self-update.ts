@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
-import { access, chmod, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -54,7 +54,7 @@ export async function updateServerCli({
 
     await rename(currentPath, backupPath);
     try {
-      await rename(extractedPath, currentPath);
+      await moveFileAcrossDevices(extractedPath, currentPath);
     } catch (error) {
       await rename(backupPath, currentPath).catch(() => undefined);
       throw error;
@@ -122,6 +122,29 @@ async function downloadFile(url: string, path: string): Promise<void> {
   }
 
   await writeFile(path, Buffer.from(await response.arrayBuffer()));
+}
+
+async function moveFileAcrossDevices(sourcePath: string, destinationPath: string): Promise<void> {
+  try {
+    await rename(sourcePath, destinationPath);
+    return;
+  } catch (error) {
+    if (!isCrossDeviceRenameError(error)) {
+      throw error;
+    }
+  }
+
+  await copyFile(sourcePath, destinationPath);
+  await chmod(destinationPath, 0o755);
+  await rm(sourcePath, { force: true });
+}
+
+function isCrossDeviceRenameError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "EXDEV"
+  );
 }
 
 function extractServerCli(archivePath: string, outputDir: string): void {

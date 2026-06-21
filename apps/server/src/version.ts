@@ -1,1 +1,1 @@
-export const TELEMUX_SERVER_VERSION = "0.1.8";
+export const TELEMUX_SERVER_VERSION = "0.1.9";
