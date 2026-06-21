@@ -77,8 +77,7 @@ export class TerminalBridge {
         }
         this.clientCols = cols;
         this.clientRows = rows;
-        await this.tmux.resizePane(this.paneId, { cols, rows });
-        this.writeControlCommand(`refresh-client -C ${cols}x${rows}`);
+        this.applyControlClientSize();
         await this.sendSnapshot();
       } else if (message.type === "focus") {
         const target = await this.tmux.findPane(message.paneId);
@@ -125,6 +124,7 @@ export class TerminalBridge {
     });
 
     this.writeControlCommand(`refresh-client -A ${this.paneId}:on`);
+    this.applyControlClientSize();
   }
 
   private async sendSnapshot(): Promise<void> {
@@ -182,6 +182,12 @@ export class TerminalBridge {
 
   private writeControlCommand(command: string): void {
     this.process?.stdin.write(`${command}\n`);
+  }
+
+  private applyControlClientSize(): void {
+    if (this.clientCols && this.clientRows) {
+      this.writeControlCommand(`refresh-client -C ${this.clientCols}x${this.clientRows}`);
+    }
   }
 
   private sendOutput(paneId: string, encodedValue: string): void {
