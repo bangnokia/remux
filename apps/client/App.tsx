@@ -1890,8 +1890,6 @@ const styles = StyleSheet.create({
   },
   windowTabsAddButton: {
     alignItems: "center",
-    borderLeftColor: "rgba(216, 229, 222, 0.08)",
-    borderLeftWidth: 1,
     flexShrink: 0,
     height: 42,
     justifyContent: "center",
