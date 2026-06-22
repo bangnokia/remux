@@ -286,13 +286,24 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
       bottom: 10px;
       color: #d8e5de;
       display: none;
-      font: 700 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      min-height: 28px;
-      padding: 0 10px;
+      height: 30px;
+      justify-content: center;
+      padding: 0;
       position: fixed;
       right: 10px;
       touch-action: manipulation;
+      width: 30px;
       z-index: 20;
+    }
+
+    #live-indicator::before {
+      border-bottom: 2px solid currentColor;
+      border-right: 2px solid currentColor;
+      content: "";
+      height: 8px;
+      margin-top: -3px;
+      transform: rotate(45deg);
+      width: 8px;
     }
 
     #live-indicator.visible {
@@ -307,7 +318,7 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
       <div id="terminal-scrollbar-thumb"></div>
     </div>
   </div>
-  <button id="live-indicator" type="button">Live</button>
+  <button id="live-indicator" type="button" aria-label="Jump to latest output"></button>
   <script>
     const post = (message) => window.ReactNativeWebView.postMessage(JSON.stringify(message));
     const paneId = ${encodedPaneId};
@@ -678,7 +689,6 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
     function updateLiveIndicator() {
       const indicator = document.getElementById('live-indicator');
       if (!indicator) return;
-      indicator.textContent = pendingOutputWhilePaused ? 'New output' : 'Live';
       indicator.classList.toggle('visible', liveFollowPaused || pendingOutputWhilePaused);
     }
 
