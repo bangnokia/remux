@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useImperativeHandle, useRef } from "react";
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from "react";
 import { Keyboard as NativeKeyboard, Platform } from "react-native";
 import { WebView } from "react-native-webview";
 import { StyleSheet, View } from "./rn";
@@ -20,7 +20,7 @@ const TERMINAL_TRACE_ENABLED = false;
 let nextTerminalTraceId = 1;
 
 const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane(
-  { paneId, wsUrl, onStatus, onTreeChanged },
+  { active = true, paneId, wsUrl, onStatus, onTreeChanged },
   ref
 ) {
   const webViewRef = useRef<WebView>(null);
@@ -33,6 +33,17 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   const html = terminalHtml(wsUrl, paneId, traceId);
   const source = Platform.OS === "android" ? { html, baseUrl: resolveAndroidWebViewBaseUrl() } : { html };
 
+  const syncViewportSize = useCallback((width: number, height: number) => {
+    if (!active) {
+      return;
+    }
+
+    traceTerminal("rn", paneId, traceId, "inject-viewport", { height, width });
+    webViewRef.current?.injectJavaScript(
+      `window.telemuxSetViewportSize && window.telemuxSetViewportSize(${Math.floor(width)}, ${Math.floor(height)}); true;`
+    );
+  }, [active, paneId, traceId]);
+
   const handleLayout = useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
     const { width, height } = event.nativeEvent.layout;
     const nextLayout = { width: Math.floor(width), height: Math.floor(height) };
@@ -42,23 +53,22 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     }
     lastLayoutRef.current = nextLayout;
     traceTerminal("rn", paneId, traceId, "layout", nextLayout);
-    syncViewportSize(nextLayout.width, nextLayout.height);
-  }, []);
+    if (active) {
+      syncViewportSize(nextLayout.width, nextLayout.height);
+    }
+  }, [active, paneId, syncViewportSize, traceId]);
 
   const syncLastViewportSize = useCallback(() => {
+    if (!active) {
+      return;
+    }
+
     const layout = lastLayoutRef.current;
     if (layout) {
       traceTerminal("rn", paneId, traceId, "load-end-sync", layout);
       syncViewportSize(layout.width, layout.height);
     }
-  }, []);
-
-  const syncViewportSize = useCallback((width: number, height: number) => {
-    traceTerminal("rn", paneId, traceId, "inject-viewport", { height, width });
-    webViewRef.current?.injectJavaScript(
-      `window.telemuxSetViewportSize && window.telemuxSetViewportSize(${Math.floor(width)}, ${Math.floor(height)}); true;`
-    );
-  }, []);
+  }, [active, paneId, syncViewportSize, traceId]);
 
   const sendToTerminal = useCallback(
     (data: string) => {
@@ -70,6 +80,12 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     },
     []
   );
+
+  useEffect(() => {
+    if (active) {
+      syncLastViewportSize();
+    }
+  }, [active, syncLastViewportSize]);
 
   useImperativeHandle(ref, () => ({
     dismissKeyboard() {
@@ -85,11 +101,13 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       webViewRef.current?.injectJavaScript("window.telemuxFocus && window.telemuxFocus(); true;");
     },
     fit() {
-      webViewRef.current?.injectJavaScript(
-        "window.telemuxScheduleFit ? window.telemuxScheduleFit() : window.telemuxFit && window.telemuxFit(); true;"
-      );
+      if (active) {
+        webViewRef.current?.injectJavaScript(
+          "window.telemuxScheduleFit ? window.telemuxScheduleFit() : window.telemuxFit && window.telemuxFit(); true;"
+        );
+      }
     }
-  }), [sendToTerminal]);
+  }), [active, sendToTerminal]);
 
   function handleMessage(event: unknown): void {
     const data = readWebViewMessageData(event);

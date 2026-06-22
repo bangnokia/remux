@@ -47,6 +47,7 @@ import type { TerminalPaneHandle } from "./src/terminal-types";
 type IconType = React.ComponentType<{ color?: string; size?: number; strokeWidth?: number }>;
 type ExpoIconName = React.ComponentProps<typeof ExpoIcon>["name"];
 type RenameTarget = { kind: "session" | "window"; id: string; name: string } | null;
+type TerminalPaneCacheEntry = { paneId: string; wsUrl: string };
 type WindowDisplayStatusKind = TmuxPaneStatusKind | "done";
 type AppBottomSheetProps = {
   children: React.ReactElement;
@@ -69,6 +70,7 @@ const NEW_CONNECTION_ID = "__new_connection__";
 const COMMAND_BAR_HEIGHT = 52;
 const ANDROID_COMMAND_BAR_BOTTOM_INSET = 4;
 const TREE_SOCKET_RECONNECT_MS = 2000;
+const TERMINAL_PANE_CACHE_LIMIT = 5;
 const COMMAND_KEYBOARD_PROXY_VALUE = " ";
 const COMMAND_KEYBOARD_PROXY_SELECTION = {
   end: COMMAND_KEYBOARD_PROXY_VALUE.length,
@@ -80,7 +82,7 @@ export default function App(): React.ReactElement {
   const { width } = useWindowDimensions();
   const wide = width >= 760;
   const sheetWidth = Math.max(0, width - 32);
-  const terminalRef = useRef<TerminalPaneHandle>(null);
+  const terminalPaneRefs = useRef<Map<string, TerminalPaneHandle>>(new Map());
   const keyboardOffset = useRef(new Animated.Value(0)).current;
   const keyboardVisibleRef = useRef(false);
   const pendingRenameTargetRef = useRef<RenameTarget>(null);
@@ -104,11 +106,22 @@ export default function App(): React.ReactElement {
   const [appActive, setAppActive] = useState(() => AppState.currentState === "active");
   const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
   const [doneWindowIds, setDoneWindowIds] = useState<Set<string>>(() => new Set());
+  const [terminalPaneCache, setTerminalPaneCache] = useState<TerminalPaneCacheEntry[]>([]);
 
   const client = useMemo(() => (connection ? new TelemuxClient(connection) : null), [connection]);
   const selected = useMemo(() => findSelectedTarget(tree, selectedPaneId), [tree, selectedPaneId]);
   const selectedWindowId = selected?.window.id ?? null;
   const terminalUrl = client && selectedPaneId ? client.terminalWebSocketUrl(selectedPaneId) : null;
+  const terminalPaneEntries = useMemo(
+    () => selectedPaneId && terminalUrl
+      ? upsertTerminalPaneCache(terminalPaneCache, { paneId: selectedPaneId, wsUrl: terminalUrl })
+      : terminalPaneCache,
+    [selectedPaneId, terminalPaneCache, terminalUrl]
+  );
+  const terminalPaneRenderEntries = useMemo(
+    () => orderTerminalPaneEntries(terminalPaneEntries, selectedPaneId),
+    [selectedPaneId, terminalPaneEntries]
+  );
   const commandBarBottomInset = Platform.OS === "android" ? ANDROID_COMMAND_BAR_BOTTOM_INSET + keyboardInset : 0;
   const terminalBottomInset = COMMAND_BAR_HEIGHT + commandBarBottomInset;
   const terminalTranslateY = keyboardLiftTranslateY(keyboardOffset);
@@ -220,6 +233,14 @@ export default function App(): React.ReactElement {
     }, 80);
   }, [refreshTree]);
 
+  const registerTerminalPaneRef = useCallback((paneId: string, handle: TerminalPaneHandle | null) => {
+    if (handle) {
+      terminalPaneRefs.current.set(paneId, handle);
+    } else {
+      terminalPaneRefs.current.delete(paneId);
+    }
+  }, []);
+
   useEffect(() => {
     void loadConnections().then((saved) => {
       setConnections(saved);
@@ -232,6 +253,45 @@ export default function App(): React.ReactElement {
       clearTimeout(pendingTreeRefreshRef.current);
     }
   }, []);
+
+  useEffect(() => {
+    terminalPaneRefs.current.clear();
+    setTerminalPaneCache((current) => current.length > 0 ? [] : current);
+  }, [connection?.id]);
+
+  useEffect(() => {
+    if (!selectedPaneId || !terminalUrl) {
+      return;
+    }
+
+    const entry = { paneId: selectedPaneId, wsUrl: terminalUrl };
+    setTerminalPaneCache((current) => {
+      const next = upsertTerminalPaneCache(current, entry);
+      return terminalPaneCacheEquals(current, next) ? current : next;
+    });
+  }, [selectedPaneId, terminalUrl]);
+
+  useEffect(() => {
+    if (!tree) {
+      terminalPaneRefs.current.clear();
+      setTerminalPaneCache((current) => current.length > 0 ? [] : current);
+      return;
+    }
+
+    const activePaneIds = treePaneIds(tree);
+    for (const paneId of terminalPaneRefs.current.keys()) {
+      if (!activePaneIds.has(paneId)) {
+        terminalPaneRefs.current.delete(paneId);
+      }
+    }
+
+    setTerminalPaneCache((current) => {
+      const next = current
+        .filter((entry) => activePaneIds.has(entry.paneId))
+        .slice(0, TERMINAL_PANE_CACHE_LIMIT);
+      return terminalPaneCacheEquals(current, next) ? current : next;
+    });
+  }, [tree]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState: AppStateStatus) => {
@@ -443,7 +503,7 @@ export default function App(): React.ReactElement {
   }
 
   function returnHome(): void {
-    terminalRef.current?.dismissKeyboard();
+    activeTerminalPane()?.dismissKeyboard();
     NativeKeyboard.dismiss();
     setShowSwitcher(false);
     setRenameTarget(null);
@@ -536,15 +596,19 @@ export default function App(): React.ReactElement {
   }
 
   function sendTerminalKey(data: string): void {
-    terminalRef.current?.sendInput(data);
+    activeTerminalPane()?.sendInput(data);
   }
 
   function sendTerminalInput(data: string): void {
-    terminalRef.current?.sendInput(data);
+    activeTerminalPane()?.sendInput(data);
   }
 
   function focusTerminalInput(): void {
-    terminalRef.current?.focusKeyboard();
+    activeTerminalPane()?.focusKeyboard();
+  }
+
+  function activeTerminalPane(): TerminalPaneHandle | null {
+    return selectedPaneId ? terminalPaneRefs.current.get(selectedPaneId) ?? null : null;
   }
 
   function flushPendingRename(): void {
@@ -630,15 +694,18 @@ export default function App(): React.ReactElement {
                   <View style={styles.emptyState}>
                     <ActivityIndicator color={palette.accent} />
                   </View>
-                ) : terminalUrl && selectedPaneId && appActive ? (
-                  <TerminalPane
-                    ref={terminalRef}
-                    key={selectedPaneId}
-                    paneId={selectedPaneId}
-                    wsUrl={terminalUrl}
-                    onStatus={() => undefined}
-                    onTreeChanged={handleTreeChanged}
-                  />
+                ) : selectedPaneId && terminalPaneRenderEntries.length > 0 && appActive ? (
+                  <>
+                    {terminalPaneRenderEntries.map((entry) => (
+                      <TerminalPaneLayer
+                        key={entry.paneId}
+                        active={entry.paneId === selectedPaneId}
+                        entry={entry}
+                        onRegisterRef={registerTerminalPaneRef}
+                        onTreeChanged={handleTreeChanged}
+                      />
+                    ))}
+                  </>
                 ) : (
                   <View style={styles.emptyState}>
                     <Text style={styles.emptyTitle}>No tmux panes</Text>
@@ -704,6 +771,39 @@ export default function App(): React.ReactElement {
         </View>
       </SafeAreaView>
     </SafeAreaProvider>
+  );
+}
+
+function TerminalPaneLayer({
+  active,
+  entry,
+  onRegisterRef,
+  onTreeChanged
+}: {
+  active: boolean;
+  entry: TerminalPaneCacheEntry;
+  onRegisterRef(paneId: string, handle: TerminalPaneHandle | null): void;
+  onTreeChanged(): void;
+}): React.ReactElement {
+  const registerRef = useCallback(
+    (handle: TerminalPaneHandle | null) => onRegisterRef(entry.paneId, handle),
+    [entry.paneId, onRegisterRef]
+  );
+
+  return (
+    <View
+      pointerEvents={active ? "auto" : "none"}
+      style={[styles.terminalPaneLayer, active ? styles.terminalPaneLayerActive : styles.terminalPaneLayerHidden]}
+    >
+      <TerminalPane
+        ref={registerRef}
+        active={active}
+        paneId={entry.paneId}
+        wsUrl={entry.wsUrl}
+        onStatus={() => undefined}
+        onTreeChanged={onTreeChanged}
+      />
+    </View>
   );
 }
 
@@ -1802,6 +1902,58 @@ function paneExists(tree: TmuxTree, paneId: string): boolean {
   );
 }
 
+function treePaneIds(tree: TmuxTree): Set<string> {
+  const paneIds = new Set<string>();
+  for (const session of tree.sessions) {
+    for (const window of session.windows) {
+      for (const pane of window.panes) {
+        paneIds.add(pane.id);
+      }
+    }
+  }
+  return paneIds;
+}
+
+function upsertTerminalPaneCache(
+  current: TerminalPaneCacheEntry[],
+  entry: TerminalPaneCacheEntry
+): TerminalPaneCacheEntry[] {
+  return [
+    entry,
+    ...current.filter((item) => item.paneId !== entry.paneId)
+  ].slice(0, TERMINAL_PANE_CACHE_LIMIT);
+}
+
+function orderTerminalPaneEntries(
+  entries: TerminalPaneCacheEntry[],
+  selectedPaneId: string | null
+): TerminalPaneCacheEntry[] {
+  if (!selectedPaneId) {
+    return entries;
+  }
+
+  const selectedEntry = entries.find((entry) => entry.paneId === selectedPaneId);
+  if (!selectedEntry) {
+    return entries;
+  }
+
+  return [
+    ...entries.filter((entry) => entry.paneId !== selectedPaneId),
+    selectedEntry
+  ];
+}
+
+function terminalPaneCacheEquals(left: TerminalPaneCacheEntry[], right: TerminalPaneCacheEntry[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((entry, index) => {
+    const other = right[index];
+    return other?.paneId === entry.paneId && other.wsUrl === entry.wsUrl;
+  });
+}
+
 function windowActivePaneId(window: TmuxWindow): string | null {
   return window.panes.find((pane) => pane.active)?.id ?? window.panes[0]?.id ?? null;
 }
@@ -2138,7 +2290,25 @@ const styles = StyleSheet.create({
   terminalFrame: {
     backgroundColor: "#0d1110",
     flex: 1,
-    minHeight: 0
+    minHeight: 0,
+    overflow: "hidden",
+    position: "relative"
+  },
+  terminalPaneLayer: {
+    backgroundColor: "#0d1110",
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0
+  },
+  terminalPaneLayerActive: {
+    opacity: 1,
+    zIndex: 2
+  },
+  terminalPaneLayerHidden: {
+    opacity: 0,
+    zIndex: 1
   },
   windowTabsBar: {
     alignItems: "center",

@@ -15,7 +15,7 @@ import {
 import type { TerminalPaneHandle, TerminalPaneProps } from "./terminal-types";
 
 const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane(
-  { paneId, wsUrl, onStatus, onTreeChanged },
+  { active = true, paneId, wsUrl, onStatus, onTreeChanged },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -23,7 +23,15 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const pendingMessagesRef = useRef<TerminalServerMessage[]>([]);
+  const activeRef = useRef(active);
   const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    activeRef.current = active;
+    if (active) {
+      window.setTimeout(() => fitTerminal(), 0);
+    }
+  }, [active]);
 
   useImperativeHandle(ref, () => ({
     dismissKeyboard() {
@@ -80,7 +88,9 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         sendSocket(socketRef.current, { type: "input", data });
       });
       terminal.onResize(({ cols, rows }) => {
-        sendSocket(socketRef.current, { type: "resize", cols, rows });
+        if (activeRef.current) {
+          sendSocket(socketRef.current, { type: "resize", cols, rows });
+        }
       });
       for (const message of pendingMessagesRef.current.splice(0)) {
         handleTerminalMessage(message);
@@ -133,7 +143,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   function fitTerminal(): void {
     const fitAddon = fitAddonRef.current;
     const terminal = terminalRef.current;
-    if (!fitAddon || !terminal) {
+    if (!activeRef.current || !fitAddon || !terminal) {
       return;
     }
 

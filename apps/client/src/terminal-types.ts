@@ -7,6 +7,7 @@ export interface TerminalPaneHandle {
 }
 
 export interface TerminalPaneProps {
+  active?: boolean;
   paneId: string;
   wsUrl: string;
   onStatus(status: string): void;
