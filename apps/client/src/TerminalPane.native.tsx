@@ -22,7 +22,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   const webViewRef = useRef<WebView>(null);
   const lastLayoutRef = useRef<{ width: number; height: number } | null>(null);
   const html = terminalHtml(wsUrl);
-  const source = Platform.OS === "android" ? { html, baseUrl: "file:///android_res/" } : { html };
+  const source = Platform.OS === "android" ? { html, baseUrl: resolveAndroidWebViewBaseUrl() } : { html };
 
   const handleLayout = useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
     const { width, height } = event.nativeEvent.layout;
@@ -122,12 +122,27 @@ function readWebViewMessageData(event: unknown): string {
   return typeof nativeEvent?.data === "string" ? nativeEvent.data : "";
 }
 
+function resolveAndroidWebViewBaseUrl(): string {
+  const metroFontUri = resolveTerminalFontUris().find((uri) => uri.startsWith("http://") || uri.startsWith("https://"));
+  if (!metroFontUri) {
+    return "file:///android_res/";
+  }
+
+  try {
+    return `${new URL(metroFontUri).origin}/`;
+  } catch {
+    return "file:///android_res/";
+  }
+}
+
 function terminalHtml(wsUrl: string): string {
   const encodedUrl = JSON.stringify(wsUrl);
-  const terminalFontCss = terminalFontFaceCss(resolveTerminalFontUris());
+  const terminalFontUris = resolveTerminalFontUris();
+  const terminalFontCss = terminalFontFaceCss(terminalFontUris);
   const encodedTerminalFontFace = JSON.stringify(TERMINAL_FONT_FACE);
   const encodedTerminalFontFamily = JSON.stringify(TERMINAL_FONT_FAMILY);
   const encodedTerminalFontSize = JSON.stringify(TERMINAL_FONT_SIZE);
+  const encodedTerminalFontUris = JSON.stringify(terminalFontUris);
   const encodedTerminalLineHeight = JSON.stringify(TERMINAL_LINE_HEIGHT);
   const encodedTerminalHorizontalPadding = JSON.stringify(TERMINAL_HORIZONTAL_PADDING);
   return `<!doctype html>
@@ -209,6 +224,7 @@ function terminalHtml(wsUrl: string): string {
     const terminalFontFace = ${encodedTerminalFontFace};
     const terminalFontFamily = ${encodedTerminalFontFamily};
     const terminalFontSize = ${encodedTerminalFontSize};
+    const terminalFontUris = ${encodedTerminalFontUris};
     const terminalLineHeight = ${encodedTerminalLineHeight};
     const terminalHorizontalPadding = ${encodedTerminalHorizontalPadding};
     const terminalScrollbarWidth = ${TERMINAL_SCROLLBAR_WIDTH};
@@ -408,6 +424,23 @@ function terminalHtml(wsUrl: string): string {
 
     async function loadTerminalFont() {
       if (!document.fonts || !terminalFontFace) return;
+
+      if (typeof FontFace === 'function') {
+        for (const fontUri of terminalFontUris) {
+          try {
+            const fontFace = new FontFace(
+              terminalFontFace,
+              'url(' + JSON.stringify(fontUri) + ') format("truetype")',
+              { display: 'block', style: 'normal', weight: '400' }
+            );
+            await fontFace.load();
+            document.fonts.add(fontFace);
+            if (document.fonts.check(terminalFontSize + 'px "' + terminalFontFace + '"')) {
+              return;
+            }
+          } catch {}
+        }
+      }
 
       try {
         await document.fonts.load(terminalFontSize + 'px "' + terminalFontFace + '"');

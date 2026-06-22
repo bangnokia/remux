@@ -21,7 +21,7 @@ export function resolveTerminalFontUris(): string[] {
   const fontUris = assetUri ? [assetUri] : [];
 
   if (Platform.OS === "android") {
-    return [ANDROID_TERMINAL_FONT_URI, ...fontUris];
+    return [...fontUris, ANDROID_TERMINAL_FONT_URI];
   }
 
   return fontUris;
