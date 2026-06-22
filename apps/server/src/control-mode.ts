@@ -8,6 +8,9 @@ const TERMINAL_SNAPSHOT_HISTORY_LINES = 2000;
 const RESIZE_SNAPSHOT_DEBOUNCE_MS = 80;
 const RESIZE_SNAPSHOT_WAIT_MS = 240;
 const RESIZE_SNAPSHOT_POLL_MS = 24;
+const TERMINAL_TRACE_ENABLED = process.env.TELEMUX_TRACE_TERMINAL_RENDER === "1";
+
+let nextBridgeTraceId = 1;
 
 export class TerminalBridge {
   private process: ChildProcessWithoutNullStreams | null = null;
@@ -20,6 +23,8 @@ export class TerminalBridge {
   private pendingResizeSnapshot = false;
   private snapshotQueue: Promise<void> = Promise.resolve();
   private paneId: string;
+  private readonly startedAt = Date.now();
+  private readonly traceId = `${Date.now().toString(36)}-${nextBridgeTraceId++}`;
   private sessionId: string;
   private suppressControlExitNotification = false;
 
@@ -34,6 +39,7 @@ export class TerminalBridge {
   }
 
   async start(): Promise<void> {
+    this.trace("start");
     this.socket.on("message", (data) => {
       this.messageQueue = this.messageQueue.then(() => this.handleMessage(data)).catch((error) => {
         this.send({
@@ -43,11 +49,17 @@ export class TerminalBridge {
         });
       });
     });
-    this.socket.on("close", () => this.dispose());
-    this.socket.on("error", () => this.dispose());
+    this.socket.on("close", () => {
+      this.trace("socket-close");
+      this.dispose();
+    });
+    this.socket.on("error", () => {
+      this.trace("socket-error");
+      this.dispose();
+    });
 
-    await this.sendSnapshot();
     this.spawnControlClient();
+    this.scheduleSnapshot();
     this.metadata.updatePreferences({ lastPaneId: this.paneId });
   }
 
@@ -86,8 +98,15 @@ export class TerminalBridge {
         const cols = clampInteger(message.cols, 20, 500);
         const rows = clampInteger(message.rows, 5, 200);
         if (cols === this.clientCols && rows === this.clientRows) {
+          this.trace("resize-ignored-unchanged", { cols, rows });
           return;
         }
+        this.trace("resize-received", {
+          cols,
+          previousCols: this.clientCols,
+          previousRows: this.clientRows,
+          rows
+        });
         this.clientCols = cols;
         this.clientRows = rows;
         this.applyControlClientSize();
@@ -120,6 +139,7 @@ export class TerminalBridge {
   }
 
   private spawnControlClient(): void {
+    this.trace("spawn-control-client", { sessionId: this.sessionId });
     this.outputSanitizer.reset();
     this.process = spawn("tmux", [...this.tmux.socketArgs(), "-C", "attach-session", "-t", this.sessionId], {
       stdio: ["pipe", "pipe", "pipe"]
@@ -143,8 +163,22 @@ export class TerminalBridge {
   }
 
   private async sendSnapshot(options: { waitForResize?: boolean } = {}): Promise<void> {
+    this.trace("snapshot-start", {
+      clientCols: this.clientCols,
+      clientRows: this.clientRows,
+      waitForResize: Boolean(options.waitForResize)
+    });
     const size = options.waitForResize ? await this.waitForResizedPaneSize() : await this.tmux.paneSize(this.paneId);
     const data = await this.tmux.capturePane(this.paneId, TERMINAL_SNAPSHOT_HISTORY_LINES);
+    this.trace("snapshot-send", {
+      clientCols: this.clientCols,
+      clientRows: this.clientRows,
+      cols: size.cols,
+      cursorX: size.cursorX,
+      cursorY: size.cursorY,
+      rows: size.rows,
+      waitForResize: Boolean(options.waitForResize)
+    });
     this.send({
       type: "snapshot",
       paneId: this.paneId,
@@ -197,12 +231,14 @@ export class TerminalBridge {
   }
 
   private writeControlCommand(command: string): void {
+    this.trace("control-command", { command });
     this.process?.stdin.write(`${command}\n`);
   }
 
   private applyControlClientSize(): void {
     if (this.clientCols && this.clientRows) {
       this.writeControlCommand(`refresh-client -C ${this.clientCols}x${this.clientRows}`);
+      this.writeControlCommand("refresh-client -c");
     }
   }
 
@@ -211,6 +247,9 @@ export class TerminalBridge {
       clearTimeout(this.pendingSnapshotTimer);
     }
 
+    this.trace("snapshot-scheduled", {
+      pendingResizeSnapshot: this.pendingResizeSnapshot
+    });
     this.pendingSnapshotTimer = setTimeout(() => {
       this.pendingSnapshotTimer = null;
       const waitForResize = this.pendingResizeSnapshot;
@@ -237,9 +276,19 @@ export class TerminalBridge {
     const deadline = Date.now() + RESIZE_SNAPSHOT_WAIT_MS;
     let size = await this.tmux.paneSize(this.paneId);
     let observedGeometryChange = paneGeometryMatches(size, targetCols, targetRows);
+    this.trace("wait-resize-start", {
+      observedCols: size.cols,
+      observedRows: size.rows,
+      targetCols,
+      targetRows
+    });
 
     while (Date.now() < deadline) {
       if (paneGeometryMatches(size, targetCols, targetRows)) {
+        this.trace("wait-resize-match", {
+          cols: size.cols,
+          rows: size.rows
+        });
         return size;
       }
 
@@ -248,11 +297,23 @@ export class TerminalBridge {
       if (!samePaneGeometry(size, nextSize)) {
         observedGeometryChange = true;
       } else if (observedGeometryChange) {
+        this.trace("wait-resize-stabilized-after-change", {
+          cols: nextSize.cols,
+          rows: nextSize.rows,
+          targetCols,
+          targetRows
+        });
         return nextSize;
       }
       size = nextSize;
     }
 
+    this.trace("wait-resize-timeout", {
+      cols: size.cols,
+      rows: size.rows,
+      targetCols,
+      targetRows
+    });
     return size;
   }
 
@@ -267,6 +328,23 @@ export class TerminalBridge {
     if (this.socket.readyState === this.socket.OPEN) {
       this.socket.send(JSON.stringify(message));
     }
+  }
+
+  private trace(event: string, details: Record<string, unknown> = {}): void {
+    if (!TERMINAL_TRACE_ENABLED) {
+      return;
+    }
+
+    console.log(`[telemux-terminal-trace] ${JSON.stringify({
+      details: {
+        ...details,
+        elapsedMs: Date.now() - this.startedAt
+      },
+      event,
+      paneId: this.paneId,
+      scope: "server",
+      traceId: this.traceId
+    })}`);
   }
 }
 

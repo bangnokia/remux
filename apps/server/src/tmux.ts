@@ -186,7 +186,7 @@ export class TmuxService {
   }
 
   async capturePane(paneId: string, historyLines = 0): Promise<string> {
-    const args = ["capture-pane", "-e", "-p"];
+    const args = ["capture-pane", "-e", "-p", "-N"];
     if (historyLines > 0) {
       args.push("-S", `-${historyLines}`);
     }

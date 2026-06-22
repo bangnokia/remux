@@ -16,13 +16,21 @@ import {
 } from "./terminal-font";
 import type { TerminalPaneHandle, TerminalPaneProps } from "./terminal-types";
 
+const TERMINAL_TRACE_ENABLED = false;
+let nextTerminalTraceId = 1;
+
 const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane(
-  { wsUrl, onStatus, onTreeChanged },
+  { paneId, wsUrl, onStatus, onTreeChanged },
   ref
 ) {
   const webViewRef = useRef<WebView>(null);
   const lastLayoutRef = useRef<{ width: number; height: number } | null>(null);
-  const html = terminalHtml(wsUrl);
+  const traceIdRef = useRef<string>("");
+  if (!traceIdRef.current) {
+    traceIdRef.current = `${Date.now().toString(36)}-${nextTerminalTraceId++}`;
+  }
+  const traceId = traceIdRef.current;
+  const html = terminalHtml(wsUrl, paneId, traceId);
   const source = Platform.OS === "android" ? { html, baseUrl: resolveAndroidWebViewBaseUrl() } : { html };
 
   const handleLayout = useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
@@ -33,17 +41,20 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       return;
     }
     lastLayoutRef.current = nextLayout;
+    traceTerminal("rn", paneId, traceId, "layout", nextLayout);
     syncViewportSize(nextLayout.width, nextLayout.height);
   }, []);
 
   const syncLastViewportSize = useCallback(() => {
     const layout = lastLayoutRef.current;
     if (layout) {
+      traceTerminal("rn", paneId, traceId, "load-end-sync", layout);
       syncViewportSize(layout.width, layout.height);
     }
   }, []);
 
   const syncViewportSize = useCallback((width: number, height: number) => {
+    traceTerminal("rn", paneId, traceId, "inject-viewport", { height, width });
     webViewRef.current?.injectJavaScript(
       `window.telemuxSetViewportSize && window.telemuxSetViewportSize(${Math.floor(width)}, ${Math.floor(height)}); true;`
     );
@@ -83,11 +94,13 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
   function handleMessage(event: unknown): void {
     const data = readWebViewMessageData(event);
     try {
-      const message = JSON.parse(data) as { type: string; value?: string };
+      const message = JSON.parse(data) as { details?: unknown; event?: string; source?: string; type: string; value?: string };
       if (message.type === "status") {
         onStatus(message.value ?? "");
       } else if (message.type === "treeChanged") {
         onTreeChanged();
+      } else if (message.type === "debug") {
+        traceTerminal(message.source ?? "webview", paneId, traceId, message.event ?? "debug", message.details);
       }
     } catch {
       onStatus(data);
@@ -125,6 +138,20 @@ function readWebViewMessageData(event: unknown): string {
   return typeof nativeEvent?.data === "string" ? nativeEvent.data : "";
 }
 
+function traceTerminal(scope: string, paneId: string, traceId: string, event: string, details?: unknown): void {
+  if (!TERMINAL_TRACE_ENABLED) {
+    return;
+  }
+
+  console.log(`[telemux-terminal-trace] ${JSON.stringify({
+    details,
+    event,
+    paneId,
+    scope,
+    traceId
+  })}`);
+}
+
 function resolveAndroidWebViewBaseUrl(): string {
   const metroFontUri = resolveTerminalFontUris().find((uri) => uri.startsWith("http://") || uri.startsWith("https://"));
   if (!metroFontUri) {
@@ -138,8 +165,11 @@ function resolveAndroidWebViewBaseUrl(): string {
   }
 }
 
-function terminalHtml(wsUrl: string): string {
+function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
   const encodedUrl = JSON.stringify(wsUrl);
+  const encodedPaneId = JSON.stringify(paneId);
+  const encodedTraceEnabled = JSON.stringify(TERMINAL_TRACE_ENABLED);
+  const encodedTraceId = JSON.stringify(traceId);
   const terminalFontUris = resolveTerminalFontUris();
   const terminalFontCss = terminalFontFaceCss(terminalFontUris);
   const encodedTerminalFontFace = JSON.stringify(TERMINAL_FONT_FACE);
@@ -280,6 +310,10 @@ function terminalHtml(wsUrl: string): string {
   <button id="live-indicator" type="button">Live</button>
   <script>
     const post = (message) => window.ReactNativeWebView.postMessage(JSON.stringify(message));
+    const paneId = ${encodedPaneId};
+    const traceEnabled = ${encodedTraceEnabled};
+    const traceId = ${encodedTraceId};
+    const traceStartedAt = Date.now();
     const ghosttyModuleUrls = [
       "https://cdn.jsdelivr.net/npm/ghostty-web@0.4.0/+esm",
       "https://esm.sh/ghostty-web@0.4.0"
@@ -295,6 +329,9 @@ function terminalHtml(wsUrl: string): string {
     let scrollbarHideTimer = 0;
     let lastSentCols;
     let lastSentRows;
+    let pendingSnapshotMessage = null;
+    let pendingOutputMessages = [];
+    let hasRenderedSnapshot = false;
     let followBottomUntil = 0;
     let liveFollowPaused = false;
     let pendingOutputWhilePaused = false;
@@ -310,11 +347,27 @@ function terminalHtml(wsUrl: string): string {
     const terminalTopPadding = ${TERMINAL_TOP_PADDING};
     const touchScrollLinePx = 14;
 
+    function trace(event, details) {
+      if (!traceEnabled) return;
+      post({
+        type: 'debug',
+        source: 'webview',
+        event,
+        details: {
+          ...(details || {}),
+          elapsedMs: Date.now() - traceStartedAt,
+          paneId,
+          traceId
+        }
+      });
+    }
+
     window.telemuxFit = () => {
       try {
         const shouldFollowBottom = shouldFollowTerminalBottom();
         applyViewportSize();
-        fitToNativeViewport();
+        const fitted = fitToNativeViewport();
+        trace('fit', { fitted, lastSentCols, lastSentRows });
         sendResizeIfChanged();
         scheduleScrollbarUpdate(false);
         if (shouldFollowBottom) {
@@ -336,8 +389,10 @@ function terminalHtml(wsUrl: string): string {
       nativeViewportHeight = nextHeight;
       document.documentElement.style.setProperty('--telemux-width', nextWidth + 'px');
       document.documentElement.style.setProperty('--telemux-height', nextHeight + 'px');
+      trace('set-viewport', { height: nextHeight, width: nextWidth });
       scheduleScrollbarUpdate(false);
       scheduleFit();
+      flushPendingSnapshot();
     };
 
     window.telemuxSend = (data) => {
@@ -357,19 +412,29 @@ function terminalHtml(wsUrl: string): string {
     };
 
     async function main() {
+      trace('main-start');
       post({ type: 'status', value: 'terminal loading' });
       await loadTerminalFont();
+      trace('font-loaded');
       const { CanvasRenderer, Terminal, init } = await importGhostty();
       await init();
+      trace('ghostty-init');
       installGhosttyLineHeight(CanvasRenderer);
       installGhosttyScrollbarSuppression(Terminal, CanvasRenderer);
-      term = new Terminal({
+      const initialGeometry = measureInitialViewportGeometry();
+      trace('terminal-initial-geometry', { initialGeometry });
+      const terminalOptions = {
         cursorBlink: true,
         convertEol: true,
         fontSize: terminalFontSize,
         fontFamily: terminalFontFamily,
         theme: { background: '#0d1110', foreground: '#d8e5de', cursor: '#7ce38b', selectionBackground: '#2b3a32' }
-      });
+      };
+      if (initialGeometry) {
+        terminalOptions.cols = initialGeometry.cols;
+        terminalOptions.rows = initialGeometry.rows;
+      }
+      term = new Terminal(terminalOptions);
       const terminalRoot = document.getElementById('terminal');
       const terminalViewport = document.getElementById('terminal-viewport');
       term.open(terminalRoot);
@@ -377,6 +442,13 @@ function terminalHtml(wsUrl: string): string {
       installNativeTouchScroll(terminalViewport || terminalRoot);
       installLiveIndicator();
       hideNativeCaret();
+      trace('terminal-open', {
+        cols: term.cols,
+        rows: term.rows,
+        viewportClientHeight: terminalViewport && terminalViewport.clientHeight,
+        viewportClientWidth: terminalViewport && terminalViewport.clientWidth
+      });
+      traceCanvasState('terminal-open-canvas');
       scheduleFit();
 
       term.onData((data) => {
@@ -384,6 +456,7 @@ function terminalHtml(wsUrl: string): string {
       });
 
       term.onResize(({ cols, rows }) => {
+        trace('terminal-resize', { cols, rows });
         sendResizeIfChanged(cols, rows);
         scheduleScrollbarUpdate(false);
       });
@@ -393,35 +466,21 @@ function terminalHtml(wsUrl: string): string {
       }
 
       socket = new WebSocket(${encodedUrl});
-      socket.onopen = () => { post({ type: 'status', value: 'connected' }); scheduleFit(); window.telemuxFocus(); };
-      socket.onclose = () => post({ type: 'status', value: 'disconnected' });
-      socket.onerror = () => post({ type: 'status', value: 'socket error' });
+      socket.onopen = () => { trace('socket-open'); post({ type: 'status', value: 'connected' }); scheduleFit(); window.telemuxFocus(); };
+      socket.onclose = () => { trace('socket-close'); post({ type: 'status', value: 'disconnected' }); };
+      socket.onerror = () => { trace('socket-error'); post({ type: 'status', value: 'socket error' }); };
       socket.onmessage = (event) => {
         const message = JSON.parse(event.data);
         if (message.type === 'snapshot') {
-          const shouldFollowBottom = shouldFollowTerminalBottom();
-          cancelPendingFit();
-          resizeTerminalToSnapshot(message);
-          term.reset();
-          term.write(message.data);
-          if (shouldFollowBottom) {
-            scrollTerminalToBottom();
-          } else {
-            pendingOutputWhilePaused = true;
-            updateLiveIndicator();
-          }
-          scheduleScrollbarUpdate(false);
+          handleSnapshot(message);
         } else if (message.type === 'output') {
-          const shouldFollowBottom = shouldFollowTerminalBottom();
-          term.write(message.data);
-          if (shouldFollowBottom) {
-            keepTerminalBottomVisible();
-          } else if (liveFollowPaused || !isTerminalAtBottom()) {
-            liveFollowPaused = true;
-            pendingOutputWhilePaused = true;
-            updateLiveIndicator();
+          if (!hasRenderedSnapshot) {
+            pendingOutputMessages.push(message);
+            return;
           }
-          scheduleScrollbarUpdate(false);
+
+          const shouldFollowBottom = shouldFollowTerminalBottom();
+          writeOutputMessage(message, shouldFollowBottom);
         } else if (message.type === 'treeChanged' || message.type === 'paneExited') {
           post({ type: 'treeChanged' });
         } else if (message.type === 'error') {
@@ -429,11 +488,86 @@ function terminalHtml(wsUrl: string): string {
         }
       };
       window.addEventListener('resize', () => {
+        trace('window-resize', {
+          clientHeight: document.documentElement.clientHeight,
+          clientWidth: document.documentElement.clientWidth,
+          innerHeight: window.innerHeight,
+          innerWidth: window.innerWidth,
+          nativeViewportHeight,
+          nativeViewportWidth
+        });
         if (!nativeViewportWidth || !nativeViewportHeight) {
           scheduleFit();
         }
       });
       setTimeout(hideNativeCaret, 0);
+    }
+
+    function handleSnapshot(message) {
+      if (!nativeViewportWidth || !nativeViewportHeight) {
+        trace('snapshot-buffered-no-native-viewport', snapshotDebugDetails(message));
+        pendingSnapshotMessage = message;
+        return;
+      }
+
+      if (snapshotGeometryIsStale(message)) {
+        trace('snapshot-skipped-stale', snapshotDebugDetails(message));
+        pendingSnapshotMessage = null;
+        fitToNativeViewport();
+        sendResizeIfChanged();
+        scheduleScrollbarUpdate(false);
+        return;
+      }
+
+      trace('snapshot-accepted', snapshotDebugDetails(message));
+      traceCanvasState('snapshot-before-write-canvas');
+      pendingSnapshotMessage = null;
+      const shouldFollowBottom = shouldFollowTerminalBottom();
+      resizeTerminalToSnapshot(message);
+      term.reset();
+      term.write(message.data);
+      trace('snapshot-painted', snapshotDebugDetails(message));
+      traceCanvasState('snapshot-after-write-canvas');
+      scheduleCanvasProbe('snapshot-after-write');
+      hasRenderedSnapshot = true;
+      flushPendingOutput(shouldFollowBottom);
+      if (shouldFollowBottom) {
+        scrollTerminalToBottom();
+      } else {
+        pendingOutputWhilePaused = true;
+        updateLiveIndicator();
+      }
+      scheduleScrollbarUpdate(false);
+      scheduleFit();
+    }
+
+    function flushPendingSnapshot() {
+      if (!pendingSnapshotMessage || !term) return;
+      const snapshot = pendingSnapshotMessage;
+      pendingSnapshotMessage = null;
+      trace('snapshot-flush-pending', snapshotDebugDetails(snapshot));
+      handleSnapshot(snapshot);
+    }
+
+    function flushPendingOutput(shouldFollowBottom) {
+      if (pendingOutputMessages.length === 0) return;
+      const messages = pendingOutputMessages;
+      pendingOutputMessages = [];
+      for (const message of messages) {
+        writeOutputMessage(message, shouldFollowBottom);
+      }
+    }
+
+    function writeOutputMessage(message, shouldFollowBottom = shouldFollowTerminalBottom()) {
+      term.write(message.data);
+      if (shouldFollowBottom) {
+        keepTerminalBottomVisible();
+      } else if (liveFollowPaused || !isTerminalAtBottom()) {
+        liveFollowPaused = true;
+        pendingOutputWhilePaused = true;
+        updateLiveIndicator();
+      }
+      scheduleScrollbarUpdate(false);
     }
 
     function resizeTerminalToSnapshot(message) {
@@ -558,28 +692,248 @@ function terminalHtml(wsUrl: string): string {
     }
 
     function fitToNativeViewport() {
-      if (!term || !term.renderer || typeof term.renderer.getMetrics !== 'function') return false;
-      const metrics = term.renderer.getMetrics();
-      if (!metrics || !metrics.width || !metrics.height) return false;
+      const geometry = measureViewportGeometry(false);
+      if (!geometry) {
+        trace('fit-no-geometry');
+        return false;
+      }
 
-      const width = nativeViewportWidth || document.documentElement.clientWidth || window.innerWidth;
-      const height = (nativeViewportHeight || document.documentElement.clientHeight || window.innerHeight) - terminalTopPadding;
-      if (!width || !height) return false;
-
-      const terminalWidth = Math.max(0, width - terminalLeftPadding - terminalRightPadding - terminalScrollbarWidth);
-      const cols = Math.max(20, Math.floor(terminalWidth / metrics.width));
-      const rows = Math.max(5, Math.floor(height / metrics.height));
-      if (cols !== term.cols || rows !== term.rows) {
-        term.resize(cols, rows);
+      if (geometry.cols !== term.cols || geometry.rows !== term.rows) {
+        trace('fit-resize', {
+          currentCols: term.cols,
+          currentRows: term.rows,
+          nextCols: geometry.cols,
+          nextRows: geometry.rows,
+          nativeViewportHeight,
+          nativeViewportWidth
+        });
+        traceCanvasState('fit-before-resize-canvas');
+        term.resize(geometry.cols, geometry.rows);
+        traceCanvasState('fit-after-resize-canvas');
+        scheduleCanvasProbe('fit-after-resize');
       }
       return true;
     }
 
+    function snapshotGeometryIsStale(message) {
+      const geometry = measureViewportGeometry(true);
+      if (!geometry) return false;
+
+      const cols = Number(message.cols);
+      const rows = Number(message.rows);
+      if (!Number.isInteger(cols) || !Number.isInteger(rows)) return false;
+      return cols !== geometry.cols || rows !== geometry.rows;
+    }
+
+    function snapshotDebugDetails(message) {
+      return {
+        expected: measureViewportGeometry(true),
+        hasNativeViewport: Boolean(nativeViewportWidth && nativeViewportHeight),
+        nativeViewportHeight,
+        nativeViewportWidth,
+        snapshotCols: Number(message && message.cols),
+        snapshotRows: Number(message && message.rows),
+        termCols: term && term.cols,
+        termRows: term && term.rows
+      };
+    }
+
+    function scheduleCanvasProbe(label) {
+      if (!traceEnabled) return;
+      requestAnimationFrame(() => {
+        traceCanvasState(label + '-raf1-canvas');
+        requestAnimationFrame(() => {
+          traceCanvasState(label + '-raf2-canvas');
+        });
+      });
+      setTimeout(() => {
+        traceCanvasState(label + '-timeout120-canvas');
+      }, 120);
+    }
+
+    function traceCanvasState(event, extra) {
+      if (!traceEnabled) return;
+      trace(event, canvasDebugDetails(extra));
+    }
+
+    function canvasDebugDetails(extra) {
+      const terminalRoot = document.getElementById('terminal');
+      const terminalViewport = document.getElementById('terminal-viewport');
+      const canvas = getTerminalCanvas();
+      const metrics = getRendererMetrics();
+      const renderer = term && term.renderer;
+      const devicePixelRatio = Number(renderer && renderer.devicePixelRatio) || window.devicePixelRatio || 1;
+      const transform = getCanvasTransform(canvas);
+      const canvasRect = rectDetails(canvas);
+      const terminalRect = rectDetails(terminalRoot);
+      const viewportRect = rectDetails(terminalViewport);
+      const expectedBackingWidth = metrics && term ? metrics.width * term.cols * devicePixelRatio : null;
+      const expectedBackingHeight = metrics && term ? metrics.height * term.rows * devicePixelRatio : null;
+      const expectedCssWidth = metrics && term ? metrics.width * term.cols : null;
+      const expectedCssHeight = metrics && term ? metrics.height * term.rows : null;
+
+      return {
+        ...(extra || {}),
+        canvas: canvas ? {
+          backingHeight: roundNumber(canvas.height),
+          backingWidth: roundNumber(canvas.width),
+          clientHeight: roundNumber(canvas.clientHeight),
+          clientWidth: roundNumber(canvas.clientWidth),
+          expectedBackingHeight: roundNumber(expectedBackingHeight),
+          expectedBackingWidth: roundNumber(expectedBackingWidth),
+          expectedCssHeight: roundNumber(expectedCssHeight),
+          expectedCssWidth: roundNumber(expectedCssWidth),
+          rect: canvasRect,
+          styleHeight: canvas.style.height || null,
+          styleWidth: canvas.style.width || null,
+          transform
+        } : null,
+        devicePixelRatio: roundNumber(devicePixelRatio),
+        documentClientHeight: document.documentElement.clientHeight,
+        documentClientWidth: document.documentElement.clientWidth,
+        expected: measureViewportGeometry(true),
+        fontCheck: Boolean(document.fonts && document.fonts.check(terminalFontSize + 'px "' + terminalFontFace + '"')),
+        fontStatus: document.fonts && document.fonts.status,
+        innerHeight: window.innerHeight,
+        innerWidth: window.innerWidth,
+        metrics: metrics ? {
+          baseline: roundNumber(metrics.baseline),
+          height: roundNumber(metrics.height),
+          width: roundNumber(metrics.width)
+        } : null,
+        nativeViewportHeight,
+        nativeViewportWidth,
+        rendererCharHeight: roundNumber(renderer && renderer.charHeight),
+        rendererCharWidth: roundNumber(renderer && renderer.charWidth),
+        termCols: term && term.cols,
+        terminal: terminalRoot ? {
+          clientHeight: terminalRoot.clientHeight,
+          clientWidth: terminalRoot.clientWidth,
+          rect: terminalRect
+        } : null,
+        termRows: term && term.rows,
+        viewport: terminalViewport ? {
+          clientHeight: terminalViewport.clientHeight,
+          clientWidth: terminalViewport.clientWidth,
+          rect: viewportRect
+        } : null
+      };
+    }
+
+    function getTerminalCanvas() {
+      if (term && term.canvas) return term.canvas;
+      if (term && term.renderer && typeof term.renderer.getCanvas === 'function') {
+        return term.renderer.getCanvas();
+      }
+      const terminalRoot = document.getElementById('terminal');
+      return terminalRoot && terminalRoot.querySelector('canvas');
+    }
+
+    function getRendererMetrics() {
+      if (!term || !term.renderer || typeof term.renderer.getMetrics !== 'function') return null;
+      return term.renderer.getMetrics();
+    }
+
+    function getCanvasTransform(canvas) {
+      try {
+        if (!canvas || typeof canvas.getContext !== 'function') return null;
+        const context = canvas.getContext('2d');
+        if (!context || typeof context.getTransform !== 'function') return null;
+        const transform = context.getTransform();
+        return {
+          a: roundNumber(transform.a),
+          b: roundNumber(transform.b),
+          c: roundNumber(transform.c),
+          d: roundNumber(transform.d),
+          e: roundNumber(transform.e),
+          f: roundNumber(transform.f)
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    function rectDetails(element) {
+      if (!element || typeof element.getBoundingClientRect !== 'function') return null;
+      const rect = element.getBoundingClientRect();
+      return {
+        bottom: roundNumber(rect.bottom),
+        height: roundNumber(rect.height),
+        left: roundNumber(rect.left),
+        right: roundNumber(rect.right),
+        top: roundNumber(rect.top),
+        width: roundNumber(rect.width)
+      };
+    }
+
+    function roundNumber(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return null;
+      return Math.round(number * 100) / 100;
+    }
+
+    function measureInitialViewportGeometry() {
+      const metrics = measureInitialFontMetrics();
+      if (!metrics || !metrics.width || !metrics.height) return null;
+
+      const width = nativeViewportWidth || document.documentElement.clientWidth || window.innerWidth;
+      const height = (nativeViewportHeight || document.documentElement.clientHeight || window.innerHeight) - terminalTopPadding;
+      if (!width || !height) return null;
+
+      const terminalWidth = Math.max(0, width - terminalLeftPadding - terminalRightPadding - terminalScrollbarWidth);
+      return {
+        cols: Math.max(20, Math.floor(terminalWidth / metrics.width)),
+        rows: Math.max(5, Math.floor(height / metrics.height))
+      };
+    }
+
+    function measureInitialFontMetrics() {
+      const context = document.createElement('canvas').getContext('2d');
+      if (!context) return null;
+
+      context.font = terminalFontSize + 'px ' + terminalFontFamily;
+      const measured = context.measureText('M');
+      const width = Math.ceil(measured.width);
+      const ascent = measured.actualBoundingBoxAscent || terminalFontSize * 0.8;
+      const descent = measured.actualBoundingBoxDescent || terminalFontSize * 0.2;
+      const originalHeight = Math.ceil(ascent + descent) + 2;
+      const originalBaseline = Math.ceil(ascent) + 1;
+      const height = Math.max(originalHeight, Math.ceil(originalHeight * terminalLineHeight));
+      const extraHeight = height - originalHeight;
+      return {
+        baseline: originalBaseline + Math.floor(extraHeight / 2),
+        height,
+        width
+      };
+    }
+
+    function measureViewportGeometry(requireNativeViewport) {
+      if (!term || !term.renderer || typeof term.renderer.getMetrics !== 'function') return null;
+      const metrics = term.renderer.getMetrics();
+      if (!metrics || !metrics.width || !metrics.height) return null;
+
+      if (requireNativeViewport && (!nativeViewportWidth || !nativeViewportHeight)) return null;
+
+      const width = nativeViewportWidth || document.documentElement.clientWidth || window.innerWidth;
+      const height = (nativeViewportHeight || document.documentElement.clientHeight || window.innerHeight) - terminalTopPadding;
+      if (!width || !height) return null;
+
+      const terminalWidth = Math.max(0, width - terminalLeftPadding - terminalRightPadding - terminalScrollbarWidth);
+      return {
+        cols: Math.max(20, Math.floor(terminalWidth / metrics.width)),
+        rows: Math.max(5, Math.floor(height / metrics.height))
+      };
+    }
+
     function sendResizeIfChanged(cols = term && term.cols, rows = term && term.rows) {
       if (!socket || socket.readyState !== WebSocket.OPEN || !Number.isInteger(cols) || !Number.isInteger(rows)) return;
-      if (cols === lastSentCols && rows === lastSentRows) return;
+      if (cols === lastSentCols && rows === lastSentRows) {
+        trace('resize-not-sent-unchanged', { cols, rows });
+        return;
+      }
       lastSentCols = cols;
       lastSentRows = rows;
+      trace('resize-sent', { cols, rows });
       socket.send(JSON.stringify({ type: 'resize', cols, rows }));
     }
 
