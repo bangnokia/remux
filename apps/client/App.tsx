@@ -6,7 +6,7 @@ import {
   RNHostView as ExpoRNHostView
 } from "@expo/ui";
 import { presentationBackground } from "@expo/ui/swift-ui/modifiers";
-import type { TmuxPane, TmuxSession, TmuxTree, TmuxWindow } from "@telemux/protocol";
+import type { TmuxPane, TmuxPaneStatusKind, TmuxSession, TmuxTree, TmuxWindow } from "@telemux/protocol";
 import {
   ArrowDown,
   ArrowUp,
@@ -46,6 +46,7 @@ import type { TerminalPaneHandle } from "./src/terminal-types";
 type IconType = React.ComponentType<{ color?: string; size?: number; strokeWidth?: number }>;
 type ExpoIconName = React.ComponentProps<typeof ExpoIcon>["name"];
 type RenameTarget = { kind: "session" | "window"; id: string; name: string } | null;
+type WindowDisplayStatusKind = TmuxPaneStatusKind | "done";
 type AppBottomSheetProps = {
   children: React.ReactElement;
   isPresented: boolean;
@@ -66,6 +67,7 @@ const DEFAULT_SETUP_PORT = DEFAULT_SERVER_FIELDS.port;
 const NEW_CONNECTION_ID = "__new_connection__";
 const COMMAND_BAR_HEIGHT = 52;
 const ANDROID_COMMAND_BAR_BOTTOM_INSET = 4;
+const PANE_STATUS_REFRESH_MS = 3000;
 const COMMAND_KEYBOARD_PROXY_VALUE = " ";
 const COMMAND_KEYBOARD_PROXY_SELECTION = {
   end: COMMAND_KEYBOARD_PROXY_VALUE.length,
@@ -84,6 +86,8 @@ export default function App(): React.ReactElement {
   const lastKeyboardHeightRef = useRef(0);
   const pendingRenameTargetRef = useRef<RenameTarget>(null);
   const pendingTreeRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousWindowStatusRef = useRef<Map<string, TmuxPaneStatusKind>>(new Map());
+  const selectedWindowIdRef = useRef<string | null>(null);
   const [connections, setConnections] = useState<SavedConnection[]>([]);
   const [connection, setConnection] = useState<SavedConnection | null>(null);
   const [setupLabel, setSetupLabel] = useState("");
@@ -98,30 +102,96 @@ export default function App(): React.ReactElement {
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
+  const [doneWindowIds, setDoneWindowIds] = useState<Set<string>>(() => new Set());
 
   const client = useMemo(() => (connection ? new TelemuxClient(connection) : null), [connection]);
   const selected = useMemo(() => findSelectedTarget(tree, selectedPaneId), [tree, selectedPaneId]);
+  const selectedWindowId = selected?.window.id ?? null;
   const terminalUrl = client && selectedPaneId ? client.terminalWebSocketUrl(selectedPaneId) : null;
   const commandBarBottomInset = Platform.OS === "android" ? ANDROID_COMMAND_BAR_BOTTOM_INSET + keyboardInset : 0;
   const terminalBottomInset = COMMAND_BAR_HEIGHT + commandBarBottomInset;
   const terminalTranslateY = keyboardLiftTranslateY(keyboardOffset);
+
+  const trackWindowStatuses = useCallback((nextTree: TmuxTree) => {
+    const previousStatuses = previousWindowStatusRef.current;
+    const currentStatuses = windowStatusMap(nextTree);
+    const viewedWindowId = selectedWindowIdRef.current;
+
+    setDoneWindowIds((currentDoneIds) => {
+      let changed = false;
+      const nextDoneIds = new Set<string>();
+
+      for (const windowId of currentDoneIds) {
+        if (currentStatuses.has(windowId)) {
+          nextDoneIds.add(windowId);
+        } else {
+          changed = true;
+        }
+      }
+
+      for (const [windowId, currentStatus] of currentStatuses) {
+        if (windowId === viewedWindowId) {
+          if (nextDoneIds.delete(windowId)) {
+            changed = true;
+          }
+          continue;
+        }
+
+        const previousStatus = previousStatuses.get(windowId);
+        if (previousStatus && isBusyWindowStatus(previousStatus) && currentStatus === "idle") {
+          if (!nextDoneIds.has(windowId)) {
+            nextDoneIds.add(windowId);
+            changed = true;
+          }
+        } else if (currentStatus !== "idle" && nextDoneIds.delete(windowId)) {
+          changed = true;
+        }
+      }
+
+      return changed ? nextDoneIds : currentDoneIds;
+    });
+
+    previousWindowStatusRef.current = currentStatuses;
+  }, []);
 
   const refreshTree = useCallback(async () => {
     if (!client) {
       return;
     }
 
-    const nextTree = await client.tree();
-    setTree(nextTree);
-    setSelectedPaneId((current) => {
-      if (current && paneExists(nextTree, current)) {
-        return current;
+    try {
+      const nextTree = await client.tree();
+      setTree(nextTree);
+      trackWindowStatuses(nextTree);
+      setSelectedPaneId((current) => {
+        if (current && paneExists(nextTree, current)) {
+          return current;
+        }
+        return nextTree.activePaneId && paneExists(nextTree, nextTree.activePaneId)
+          ? nextTree.activePaneId
+          : firstPaneId(nextTree);
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to refresh tmux state");
+    }
+  }, [client, trackWindowStatuses]);
+
+  useEffect(() => {
+    selectedWindowIdRef.current = selectedWindowId;
+    if (!selectedWindowId) {
+      return;
+    }
+
+    setDoneWindowIds((currentDoneIds) => {
+      if (!currentDoneIds.has(selectedWindowId)) {
+        return currentDoneIds;
       }
-      return nextTree.activePaneId && paneExists(nextTree, nextTree.activePaneId)
-        ? nextTree.activePaneId
-        : firstPaneId(nextTree);
+
+      const nextDoneIds = new Set(currentDoneIds);
+      nextDoneIds.delete(selectedWindowId);
+      return nextDoneIds;
     });
-  }, [client]);
+  }, [selectedWindowId]);
 
   const handleTreeChanged = useCallback(() => {
     if (pendingTreeRefreshRef.current) {
@@ -152,6 +222,22 @@ export default function App(): React.ReactElement {
       return;
     }
 
+    const intervalId = setInterval(() => {
+      void refreshTree();
+    }, PANE_STATUS_REFRESH_MS);
+
+    return () => clearInterval(intervalId);
+  }, [client, refreshTree]);
+
+  useEffect(() => {
+    previousWindowStatusRef.current = new Map();
+    selectedWindowIdRef.current = null;
+    setDoneWindowIds(new Set());
+
+    if (!client) {
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -161,6 +247,7 @@ export default function App(): React.ReactElement {
           return;
         }
         setTree(nextTree);
+        trackWindowStatuses(nextTree);
         const preferredPane = preferences.lastPaneId && paneExists(nextTree, preferences.lastPaneId)
           ? preferences.lastPaneId
           : firstPaneId(nextTree);
@@ -180,7 +267,7 @@ export default function App(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, trackWindowStatuses]);
 
   useEffect(() => {
     if (client && selectedPaneId) {
@@ -303,6 +390,9 @@ export default function App(): React.ReactElement {
     setConnection(null);
     setTree(null);
     setSelectedPaneId(null);
+    previousWindowStatusRef.current = new Map();
+    selectedWindowIdRef.current = null;
+    setDoneWindowIds(new Set());
     setError(null);
     setLoading(false);
   }
@@ -316,6 +406,7 @@ export default function App(): React.ReactElement {
     try {
       const nextTree = await action();
       setTree(nextTree);
+      trackWindowStatuses(nextTree);
       if (selectPane !== undefined) {
         setSelectedPaneId(selectPane);
       } else if (nextTree.activePaneId && paneExists(nextTree, nextTree.activePaneId)) {
@@ -460,6 +551,7 @@ export default function App(): React.ReactElement {
 
             <View style={styles.primary}>
               <WindowTabsBar
+                doneWindowIds={doneWindowIds}
                 selectedWindowId={selected?.window.id ?? null}
                 session={selected?.session ?? null}
                 onCreateWindow={() => void createWindow()}
@@ -1126,11 +1218,13 @@ function WindowNode({
 }
 
 function WindowTabsBar({
+  doneWindowIds,
   session,
   selectedWindowId,
   onCreateWindow,
   onSelectWindow
 }: {
+  doneWindowIds: Set<string>;
   session: TmuxSession | null;
   selectedWindowId: string | null;
   onCreateWindow(): void;
@@ -1150,13 +1244,16 @@ function WindowTabsBar({
       >
         {session.windows.map((window) => {
           const selected = window.id === selectedWindowId;
+          const status = windowDisplayStatus(window, doneWindowIds);
+          const statusLabel = windowDisplayStatusLabel(status);
           return (
             <Pressable
               key={window.id}
-              accessibilityLabel={`Switch to window ${window.index}: ${window.name}`}
+              accessibilityLabel={`Switch to ${statusLabel} window ${window.index}: ${window.name}`}
               onPress={() => onSelectWindow(window)}
               style={[styles.windowTab, selected ? styles.windowTabSelected : null]}
             >
+              <WindowStatusDot status={status} />
               <Text numberOfLines={1} style={[styles.windowTabText, selected ? styles.windowTabTextSelected : null]}>
                 {window.name}
               </Text>
@@ -1172,6 +1269,62 @@ function WindowTabsBar({
         <AdaptiveIcon fallback={Plus} iosSymbol="plus" color={palette.text} size={17} />
       </TouchableOpacity>
     </View>
+  );
+}
+
+function WindowStatusDot({ status }: { status: WindowDisplayStatusKind }): React.ReactElement {
+  const progress = useRef(new Animated.Value(1)).current;
+  const pulsing = status === "working";
+
+  useEffect(() => {
+    if (!pulsing) {
+      progress.stopAnimation();
+      progress.setValue(1);
+      return undefined;
+    }
+
+    progress.setValue(0);
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(progress, {
+          duration: 1300,
+          easing: Easing.inOut(Easing.quad),
+          toValue: 1,
+          useNativeDriver: true
+        }),
+        Animated.timing(progress, {
+          duration: 1300,
+          easing: Easing.inOut(Easing.quad),
+          toValue: 0,
+          useNativeDriver: true
+        })
+      ])
+    );
+    animation.start();
+
+    return () => {
+      animation.stop();
+      progress.setValue(1);
+    };
+  }, [progress, pulsing]);
+
+  const pulseStyle = pulsing
+    ? {
+        opacity: progress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, 1]
+        })
+      }
+    : null;
+
+  return (
+    <Animated.View
+      style={[
+        styles.windowTabStatusDot,
+        { backgroundColor: windowDisplayStatusColor(status) },
+        pulseStyle
+      ]}
+    />
   );
 }
 
@@ -1599,6 +1752,78 @@ function firstPaneId(tree: TmuxTree): string | null {
   return tree.sessions[0]?.windows[0]?.panes[0]?.id ?? null;
 }
 
+function windowStatusMap(tree: TmuxTree): Map<string, TmuxPaneStatusKind> {
+  const statuses = new Map<string, TmuxPaneStatusKind>();
+  for (const session of tree.sessions) {
+    for (const window of session.windows) {
+      statuses.set(window.id, windowStatusKind(window));
+    }
+  }
+  return statuses;
+}
+
+function windowStatusKind(window: TmuxWindow): TmuxPaneStatusKind {
+  const paneStatuses = window.panes.map((pane) => pane.status?.kind ?? "idle");
+  if (paneStatuses.includes("blocked")) {
+    return "blocked";
+  }
+  if (paneStatuses.includes("working")) {
+    return "working";
+  }
+  if (paneStatuses.includes("running")) {
+    return "running";
+  }
+  if (paneStatuses.length > 0 && paneStatuses.every((status) => status === "dead")) {
+    return "dead";
+  }
+  return "idle";
+}
+
+function windowDisplayStatus(window: TmuxWindow, doneWindowIds: Set<string>): WindowDisplayStatusKind {
+  if (doneWindowIds.has(window.id)) {
+    return "done";
+  }
+  return windowStatusKind(window);
+}
+
+function isBusyWindowStatus(status: TmuxPaneStatusKind): boolean {
+  return status === "blocked" || status === "running" || status === "working";
+}
+
+function windowDisplayStatusColor(status: WindowDisplayStatusKind): string {
+  switch (status) {
+    case "blocked":
+      return palette.danger;
+    case "done":
+      return palette.accent;
+    case "running":
+      return palette.info;
+    case "working":
+      return palette.warning;
+    case "dead":
+      return palette.faint;
+    case "idle":
+      return palette.faint;
+  }
+}
+
+function windowDisplayStatusLabel(status: WindowDisplayStatusKind): string {
+  switch (status) {
+    case "blocked":
+      return "blocked";
+    case "done":
+      return "done";
+    case "running":
+      return "running";
+    case "working":
+      return "working";
+    case "dead":
+      return "dead";
+    case "idle":
+      return "idle";
+  }
+}
+
 const palette = {
   bg: "#101412",
   panel: "#151b18",
@@ -1609,6 +1834,8 @@ const palette = {
   accent: "#7ce38b",
   accentStrong: "#58c96a",
   danger: "#ff7d7d",
+  info: "#7fb7ff",
+  warning: "#f0c95a",
   line: "#26312b"
 };
 
@@ -1868,6 +2095,8 @@ const styles = StyleSheet.create({
     borderColor: "transparent",
     borderRadius: 7,
     borderWidth: 1,
+    flexDirection: "row",
+    gap: 7,
     height: 30,
     justifyContent: "center",
     maxWidth: 156,
@@ -1880,13 +2109,19 @@ const styles = StyleSheet.create({
   },
   windowTabText: {
     color: palette.muted,
+    flexShrink: 1,
     fontSize: 12,
     fontWeight: "700",
-    letterSpacing: 0
+    letterSpacing: 0,
+    minWidth: 0
   },
   windowTabTextSelected: {
     color: palette.text,
     fontWeight: "800"
+  },
+  windowTabStatusDot: {
+    height: 6,
+    width: 6
   },
   windowTabsAddButton: {
     alignItems: "center",

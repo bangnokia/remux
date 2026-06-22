@@ -1,10 +1,20 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { TmuxPane, TmuxSession, TmuxTree, TmuxWindow } from "@telemux/protocol";
+import type {
+  TmuxAgentKind,
+  TmuxPane,
+  TmuxPaneStatus,
+  TmuxSession,
+  TmuxTree,
+  TmuxWindow
+} from "@telemux/protocol";
 import { badRequest, notFound } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
 const FIELD_SEPARATOR = "\u001f";
+const STATUS_CAPTURE_LINES = 40;
+const DEFAULT_PANE_STATUS: TmuxPaneStatus = { kind: "idle", agent: null, label: "Idle" };
+const SHELL_COMMANDS = new Set(["ash", "bash", "dash", "elvish", "fish", "ksh", "nu", "pwsh", "sh", "tcsh", "xonsh", "zsh"]);
 const CONTROL_INPUT_KEYS = new Map<string, string>([
   ["\u0003", "C-c"],
   ["\u0004", "C-d"],
@@ -79,6 +89,8 @@ export class TmuxService {
         window.panes.push(item.pane);
       }
     }
+
+    await this.annotatePaneStatuses(panes.map((item) => item.pane));
 
     for (const session of sessionsById.values()) {
       session.windows.sort((left, right) => left.index - right.index);
@@ -306,9 +318,30 @@ export class TmuxService {
         width: Number(fields[7] ?? 0),
         height: Number(fields[8] ?? 0),
         dead: fields[9] === "1",
-        inMode: fields[10] === "1"
+        inMode: fields[10] === "1",
+        status: DEFAULT_PANE_STATUS
       }
     }));
+  }
+
+  private async annotatePaneStatuses(panes: TmuxPane[]): Promise<void> {
+    await Promise.all(
+      panes.map(async (pane) => {
+        let visibleText = "";
+        if (!pane.dead) {
+          try {
+            visibleText = await this.capturePaneForStatus(pane.id);
+          } catch {
+            visibleText = "";
+          }
+        }
+        pane.status = classifyPaneStatus(pane, visibleText);
+      })
+    );
+  }
+
+  private async capturePaneForStatus(paneId: string): Promise<string> {
+    return this.run(["capture-pane", "-p", "-J", "-S", `-${STATUS_CAPTURE_LINES}`, "-t", paneId]);
   }
 
   private async run(args: string[], options: TmuxCommandOptions = {}): Promise<string> {
@@ -389,6 +422,101 @@ export function terminalInputToSendKeysArgs(paneId: string, data: string): strin
 
   flushLiteral();
   return commands;
+}
+
+export function classifyPaneStatus(
+  pane: Pick<TmuxPane, "currentCommand" | "dead" | "inMode">,
+  visibleText = ""
+): TmuxPaneStatus {
+  if (pane.dead) {
+    return { kind: "dead", agent: null, label: "Dead" };
+  }
+
+  if (pane.inMode) {
+    return { kind: "idle", agent: null, label: "Copy mode" };
+  }
+
+  const command = normalizeCommand(pane.currentCommand);
+  const text = normalizeVisibleText(visibleText);
+  const statusText = normalizeVisibleStatusText(visibleText);
+  const agent = detectAgent(command, text);
+
+  if (agent) {
+    if (isBlockedAgentText(statusText)) {
+      return { kind: "blocked", agent, label: `${formatAgentName(agent)} blocked` };
+    }
+    if (isWorkingAgentText(statusText)) {
+      return { kind: "working", agent, label: `${formatAgentName(agent)} working` };
+    }
+    return { kind: "idle", agent, label: `${formatAgentName(agent)} idle` };
+  }
+
+  if (!command || SHELL_COMMANDS.has(command)) {
+    return { kind: "idle", agent: null, label: "Idle" };
+  }
+
+  return { kind: "running", agent: null, label: "Running" };
+}
+
+function normalizeCommand(command: string): string {
+  return command.trim().split(/[\\/]/).pop()?.toLowerCase() ?? "";
+}
+
+function normalizeVisibleText(text: string): string {
+  return text
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeVisibleStatusText(text: string): string {
+  const lines = text
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.slice(-8).join(" ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function detectAgent(command: string, text: string): TmuxAgentKind | null {
+  if (/(^|[-_\s])codex($|[-_\s])/.test(command) || /\bcodex\b/.test(text)) {
+    return "codex";
+  }
+  if (/(^|[-_\s])claude($|[-_\s])|claude-code/.test(command) || /\bclaude code\b|\bclaude\b/.test(text)) {
+    return "claude";
+  }
+  if (command === "pi" || command === "pi-agent" || /\bpi\b/.test(text)) {
+    return "pi";
+  }
+  if (/\b(agent|assistant)\b/.test(command)) {
+    return "unknown";
+  }
+  return null;
+}
+
+function isBlockedAgentText(text: string): boolean {
+  return /\b(approval|approve|permission|allow|deny|confirm|confirmation|continue|proceed|accept|reject)\b/.test(text) ||
+    /\b(do you want|requires approval|waiting for approval|press enter|yes\/no|\by\/n\b)\b/.test(text);
+}
+
+function isWorkingAgentText(text: string): boolean {
+  return /\b(thinking|working|reading|editing|searching|executing|applying|analyzing|planning|calling|tool call|generating)\b/.test(text) ||
+    /(^|[^-])\brunning\b/.test(text) ||
+    /\b(esc to interrupt|ctrl-c to interrupt|ctrl\+c to interrupt|stop generating)\b/.test(text);
+}
+
+function formatAgentName(agent: TmuxAgentKind): string {
+  switch (agent) {
+    case "codex":
+      return "Codex";
+    case "claude":
+      return "Claude";
+    case "pi":
+      return "Pi";
+    case "unknown":
+      return "Agent";
+  }
 }
 
 function parseRows(output: string): string[][] {

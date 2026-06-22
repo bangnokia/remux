@@ -2,6 +2,14 @@ export const TELEMUX_API_VERSION = "0.1.1";
 export const REMUX_API_VERSION = TELEMUX_API_VERSION;
 
 export type TmuxId = string;
+export type TmuxPaneStatusKind = "idle" | "running" | "working" | "blocked" | "dead";
+export type TmuxAgentKind = "codex" | "claude" | "pi" | "unknown";
+
+export interface TmuxPaneStatus {
+  kind: TmuxPaneStatusKind;
+  agent: TmuxAgentKind | null;
+  label: string;
+}
 
 export interface TmuxPane {
   id: TmuxId;
@@ -14,6 +22,7 @@ export interface TmuxPane {
   height: number;
   dead: boolean;
   inMode: boolean;
+  status: TmuxPaneStatus;
 }
 
 export interface TmuxWindow {
