@@ -12,8 +12,9 @@ import { badRequest, notFound } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
 const FIELD_SEPARATOR = "\u001f";
-const STATUS_CAPTURE_LINES = 40;
+const STATUS_CAPTURE_LINES = 12;
 const DEFAULT_PANE_STATUS: TmuxPaneStatus = { kind: "idle", agent: null, label: "Idle" };
+const AGENT_COMMANDS = new Set(["claude", "claude-code", "codex", "pi", "pi-agent"]);
 const SHELL_COMMANDS = new Set(["ash", "bash", "dash", "elvish", "fish", "ksh", "nu", "pwsh", "sh", "tcsh", "xonsh", "zsh"]);
 const CONTROL_INPUT_KEYS = new Map<string, string>([
   ["\u0003", "C-c"],
@@ -96,6 +97,10 @@ export class TmuxService {
       session.windows.sort((left, right) => left.index - right.index);
       for (const window of session.windows) {
         window.panes.sort((left, right) => left.index - right.index);
+        window.displayName = windowDisplayNameFromCurrentPath(
+          (window.panes.find((pane) => pane.active) ?? window.panes[0])?.currentPath ?? "",
+          window.name
+        );
       }
     }
 
@@ -328,7 +333,7 @@ export class TmuxService {
     await Promise.all(
       panes.map(async (pane) => {
         let visibleText = "";
-        if (!pane.dead) {
+        if (shouldCapturePaneStatus(pane)) {
           try {
             visibleText = await this.capturePaneForStatus(pane.id);
           } catch {
@@ -460,6 +465,29 @@ export function classifyPaneStatus(
 
 function normalizeCommand(command: string): string {
   return command.trim().split(/[\\/]/).pop()?.toLowerCase() ?? "";
+}
+
+function shouldCapturePaneStatus(pane: Pick<TmuxPane, "currentCommand" | "dead" | "inMode">): boolean {
+  if (pane.dead || pane.inMode) {
+    return false;
+  }
+
+  const command = normalizeCommand(pane.currentCommand);
+  return AGENT_COMMANDS.has(command) || /\b(agent|assistant)\b/.test(command);
+}
+
+export function windowDisplayNameFromCurrentPath(currentPath: string, fallbackName: string): string {
+  const trimmed = currentPath.trim();
+  if (!trimmed) {
+    return fallbackName;
+  }
+
+  const normalized = trimmed.replace(/[\\/]+$/, "");
+  if (!normalized) {
+    return trimmed.startsWith("/") || trimmed.startsWith("\\") ? "/" : fallbackName;
+  }
+
+  return normalized.split(/[\\/]/).pop() || fallbackName;
 }
 
 function normalizeVisibleText(text: string): string {

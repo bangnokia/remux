@@ -6,7 +6,7 @@ import {
   RNHostView as ExpoRNHostView
 } from "@expo/ui";
 import { presentationBackground } from "@expo/ui/swift-ui/modifiers";
-import type { TmuxPane, TmuxPaneStatusKind, TmuxSession, TmuxTree, TmuxWindow } from "@telemux/protocol";
+import type { TmuxPane, TmuxPaneStatusKind, TmuxSession, TmuxTree, TmuxWindow, TreeServerMessage } from "@telemux/protocol";
 import {
   ArrowDown,
   ArrowUp,
@@ -21,7 +21,8 @@ import {
   Trash2,
 } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Animated, Easing, Keyboard as NativeKeyboard, TextInput as NativeTextInput } from "react-native";
+import { Animated, AppState, Easing, Keyboard as NativeKeyboard, TextInput as NativeTextInput } from "react-native";
+import type { AppStateStatus } from "react-native";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -67,7 +68,7 @@ const DEFAULT_SETUP_PORT = DEFAULT_SERVER_FIELDS.port;
 const NEW_CONNECTION_ID = "__new_connection__";
 const COMMAND_BAR_HEIGHT = 52;
 const ANDROID_COMMAND_BAR_BOTTOM_INSET = 4;
-const PANE_STATUS_REFRESH_MS = 3000;
+const TREE_SOCKET_RECONNECT_MS = 2000;
 const COMMAND_KEYBOARD_PROXY_VALUE = " ";
 const COMMAND_KEYBOARD_PROXY_SELECTION = {
   end: COMMAND_KEYBOARD_PROXY_VALUE.length,
@@ -86,6 +87,7 @@ export default function App(): React.ReactElement {
   const lastKeyboardHeightRef = useRef(0);
   const pendingRenameTargetRef = useRef<RenameTarget>(null);
   const pendingTreeRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTreeSignatureRef = useRef<string | null>(null);
   const previousWindowStatusRef = useRef<Map<string, TmuxPaneStatusKind>>(new Map());
   const selectedWindowIdRef = useRef<string | null>(null);
   const [connections, setConnections] = useState<SavedConnection[]>([]);
@@ -101,6 +103,7 @@ export default function App(): React.ReactElement {
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [appActive, setAppActive] = useState(() => AppState.currentState === "active");
   const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
   const [doneWindowIds, setDoneWindowIds] = useState<Set<string>>(() => new Set());
 
@@ -154,6 +157,30 @@ export default function App(): React.ReactElement {
     previousWindowStatusRef.current = currentStatuses;
   }, []);
 
+  const reconcileSelectedPane = useCallback((nextTree: TmuxTree) => {
+    setSelectedPaneId((current) => {
+      if (current && paneExists(nextTree, current)) {
+        return current;
+      }
+      return nextTree.activePaneId && paneExists(nextTree, nextTree.activePaneId)
+        ? nextTree.activePaneId
+        : firstPaneId(nextTree);
+    });
+  }, []);
+
+  const applyTree = useCallback((nextTree: TmuxTree, options: { force?: boolean } = {}) => {
+    const signature = tmuxTreeSignature(nextTree);
+    if (!options.force && signature === lastTreeSignatureRef.current) {
+      return false;
+    }
+
+    lastTreeSignatureRef.current = signature;
+    setTree(nextTree);
+    trackWindowStatuses(nextTree);
+    reconcileSelectedPane(nextTree);
+    return true;
+  }, [reconcileSelectedPane, trackWindowStatuses]);
+
   const refreshTree = useCallback(async () => {
     if (!client) {
       return;
@@ -161,20 +188,11 @@ export default function App(): React.ReactElement {
 
     try {
       const nextTree = await client.tree();
-      setTree(nextTree);
-      trackWindowStatuses(nextTree);
-      setSelectedPaneId((current) => {
-        if (current && paneExists(nextTree, current)) {
-          return current;
-        }
-        return nextTree.activePaneId && paneExists(nextTree, nextTree.activePaneId)
-          ? nextTree.activePaneId
-          : firstPaneId(nextTree);
-      });
+      applyTree(nextTree);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to refresh tmux state");
     }
-  }, [client, trackWindowStatuses]);
+  }, [applyTree, client]);
 
   useEffect(() => {
     selectedWindowIdRef.current = selectedWindowId;
@@ -218,18 +236,69 @@ export default function App(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    if (!client) {
+    const subscription = AppState.addEventListener("change", (nextState: AppStateStatus) => {
+      setAppActive(nextState === "active");
+    });
+
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!client || !appActive) {
       return;
     }
 
-    const intervalId = setInterval(() => {
-      void refreshTree();
-    }, PANE_STATUS_REFRESH_MS);
+    let cancelled = false;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    return () => clearInterval(intervalId);
-  }, [client, refreshTree]);
+    const clearReconnectTimer = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const connectSocket = () => {
+      clearReconnectTimer();
+      socket = new WebSocket(client.treeWebSocketUrl());
+
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data) as TreeServerMessage;
+          if (message.type === "tree") {
+            applyTree(message.tree);
+          } else if (message.type === "error") {
+            setError(message.message);
+          }
+        } catch {
+          setError("Invalid tmux tree update");
+        }
+      };
+
+      socket.onclose = () => {
+        socket = null;
+        if (!cancelled) {
+          reconnectTimer = setTimeout(connectSocket, TREE_SOCKET_RECONNECT_MS);
+        }
+      };
+
+      socket.onerror = () => {
+        socket?.close();
+      };
+    };
+
+    connectSocket();
+
+    return () => {
+      cancelled = true;
+      clearReconnectTimer();
+      socket?.close();
+    };
+  }, [appActive, applyTree, client]);
 
   useEffect(() => {
+    lastTreeSignatureRef.current = null;
     previousWindowStatusRef.current = new Map();
     selectedWindowIdRef.current = null;
     setDoneWindowIds(new Set());
@@ -246,8 +315,7 @@ export default function App(): React.ReactElement {
         if (cancelled) {
           return;
         }
-        setTree(nextTree);
-        trackWindowStatuses(nextTree);
+        applyTree(nextTree, { force: true });
         const preferredPane = preferences.lastPaneId && paneExists(nextTree, preferences.lastPaneId)
           ? preferences.lastPaneId
           : firstPaneId(nextTree);
@@ -267,7 +335,7 @@ export default function App(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [client, trackWindowStatuses]);
+  }, [applyTree, client]);
 
   useEffect(() => {
     if (client && selectedPaneId) {
@@ -390,6 +458,7 @@ export default function App(): React.ReactElement {
     setConnection(null);
     setTree(null);
     setSelectedPaneId(null);
+    lastTreeSignatureRef.current = null;
     previousWindowStatusRef.current = new Map();
     selectedWindowIdRef.current = null;
     setDoneWindowIds(new Set());
@@ -405,8 +474,7 @@ export default function App(): React.ReactElement {
     setError(null);
     try {
       const nextTree = await action();
-      setTree(nextTree);
-      trackWindowStatuses(nextTree);
+      applyTree(nextTree, { force: true });
       if (selectPane !== undefined) {
         setSelectedPaneId(selectPane);
       } else if (nextTree.activePaneId && paneExists(nextTree, nextTree.activePaneId)) {
@@ -570,7 +638,7 @@ export default function App(): React.ReactElement {
                   <View style={styles.emptyState}>
                     <ActivityIndicator color={palette.accent} />
                   </View>
-                ) : terminalUrl && selectedPaneId ? (
+                ) : terminalUrl && selectedPaneId && appActive ? (
                   <TerminalPane
                     ref={terminalRef}
                     key={selectedPaneId}
@@ -1080,13 +1148,15 @@ function SheetWindowRow({
   onRename(): void;
   onSelect(): void;
 }): React.ReactElement {
+  const name = windowDisplayName(window);
+
   return (
     <View style={styles.sheetWindowRow}>
       <Pressable onPress={onSelect} style={styles.sheetWindowSelect}>
         <AdaptiveIcon fallback={ChevronRight} iosSymbol="chevron.right" color={selected ? palette.accent : palette.faint} size={16} />
         <View style={styles.sheetWindowTextGroup}>
           <Text numberOfLines={1} style={[styles.sheetWindowName, selected ? styles.sheetWindowNameSelected : null]}>
-            {window.index}: {window.name}
+            {window.index}: {name}
           </Text>
         </View>
       </Pressable>
@@ -1094,14 +1164,14 @@ function SheetWindowRow({
         <IconButton
           icon={Edit3}
           iosSymbol="pencil"
-          label={`Rename window ${window.name}`}
+          label={`Rename window ${name}`}
           onPress={onRename}
           size={16}
         />
         <IconButton
           icon={Trash2}
           iosSymbol="trash"
-          label={`Destroy window ${window.name}`}
+          label={`Destroy window ${name}`}
           onPress={onDelete}
           size={16}
         />
@@ -1189,24 +1259,26 @@ function WindowNode({
   onRename(): void;
   onSelect(): void;
 }): React.ReactElement {
+  const name = windowDisplayName(window);
+
   return (
     <View style={[styles.windowRow, selected ? styles.windowRowSelected : null]}>
       <Pressable onPress={onSelect} style={styles.windowSelectArea}>
         <AdaptiveIcon fallback={ChevronRight} iosSymbol="chevron.right" color={palette.muted} size={14} />
         <Text numberOfLines={1} style={[styles.windowName, selected ? styles.windowNameSelected : null]}>
-          {window.index}: {window.name}
+          {window.index}: {name}
         </Text>
       </Pressable>
       <View style={styles.windowActions}>
         <TouchableOpacity
-          accessibilityLabel={`Rename window ${window.name}`}
+          accessibilityLabel={`Rename window ${name}`}
           onPress={onRename}
           style={styles.inlineIcon}
         >
           <AdaptiveIcon fallback={Edit3} iosSymbol="pencil" color={selected ? palette.accent : palette.muted} size={14} />
         </TouchableOpacity>
         <TouchableOpacity
-          accessibilityLabel={`Destroy window ${window.name}`}
+          accessibilityLabel={`Destroy window ${name}`}
           onPress={onDelete}
           style={styles.inlineIcon}
         >
@@ -1246,16 +1318,17 @@ function WindowTabsBar({
           const selected = window.id === selectedWindowId;
           const status = windowDisplayStatus(window, doneWindowIds);
           const statusLabel = windowDisplayStatusLabel(status);
+          const name = windowDisplayName(window);
           return (
             <Pressable
               key={window.id}
-              accessibilityLabel={`Switch to ${statusLabel} window ${window.index}: ${window.name}`}
+              accessibilityLabel={`Switch to ${statusLabel} window ${window.index}: ${name}`}
               onPress={() => onSelectWindow(window)}
               style={[styles.windowTab, selected ? styles.windowTabSelected : null]}
             >
               <WindowStatusDot status={status} />
               <Text numberOfLines={1} style={[styles.windowTabText, selected ? styles.windowTabTextSelected : null]}>
-                {window.name}
+                {name}
               </Text>
             </Pressable>
           );
@@ -1748,8 +1821,19 @@ function windowActivePaneId(window: TmuxWindow): string | null {
   return window.panes.find((pane) => pane.active)?.id ?? window.panes[0]?.id ?? null;
 }
 
+function windowDisplayName(window: TmuxWindow): string {
+  return window.displayName?.trim() || window.name;
+}
+
 function firstPaneId(tree: TmuxTree): string | null {
   return tree.sessions[0]?.windows[0]?.panes[0]?.id ?? null;
+}
+
+function tmuxTreeSignature(tree: TmuxTree): string {
+  return JSON.stringify({
+    ...tree,
+    updatedAt: undefined
+  });
 }
 
 function windowStatusMap(tree: TmuxTree): Map<string, TmuxPaneStatusKind> {

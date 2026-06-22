@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyPaneStatus } from "../src/tmux.js";
+import { classifyPaneStatus, windowDisplayNameFromCurrentPath } from "../src/tmux.js";
 
 const basePane = {
   currentCommand: "zsh",
@@ -51,5 +51,19 @@ describe("classifyPaneStatus", () => {
 
   it("marks dead panes as dead", () => {
     expect(classifyPaneStatus({ ...basePane, dead: true }).kind).toBe("dead");
+  });
+});
+
+describe("windowDisplayNameFromCurrentPath", () => {
+  it("uses the current folder name", () => {
+    expect(windowDisplayNameFromCurrentPath("/home/dau/Code/telemux", "zsh")).toBe("telemux");
+  });
+
+  it("handles trailing slashes", () => {
+    expect(windowDisplayNameFromCurrentPath("/home/dau/Code/project/", "zsh")).toBe("project");
+  });
+
+  it("falls back when tmux does not report a path", () => {
+    expect(windowDisplayNameFromCurrentPath("", "zsh")).toBe("zsh");
   });
 });

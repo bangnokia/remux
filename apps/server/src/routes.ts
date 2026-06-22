@@ -7,6 +7,8 @@ import type { MetadataStore } from "./metadata.js";
 import { TerminalBridge } from "./control-mode.js";
 import type { TmuxService } from "./tmux.js";
 import { TELEMUX_API_VERSION } from "@telemux/protocol";
+import type { TreeClientMessage, TreeServerMessage, TmuxTree } from "@telemux/protocol";
+import type { RawData, WebSocket } from "ws";
 
 interface RouteContext {
   auth: AuthState;
@@ -14,8 +16,11 @@ interface RouteContext {
   tmux: TmuxService;
 }
 
+const TREE_REFRESH_MS = 3000;
+
 export async function registerRoutes(app: FastifyInstance, context: RouteContext): Promise<void> {
   await app.register(websocket);
+  const treeBroadcaster = new TreeBroadcaster(context);
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) {
@@ -53,20 +58,26 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
   app.post("/api/sessions", async (request) => {
     const body = readBody<{ name?: unknown }>(request);
     const paneId = await context.tmux.createSession(readOptionalName(body.name));
-    return context.tmux.tree(paneId ?? context.metadata.getPreferences().lastPaneId);
+    const tree = await context.tmux.tree(paneId ?? context.metadata.getPreferences().lastPaneId);
+    treeBroadcaster.publish(tree);
+    return tree;
   });
 
   app.patch("/api/sessions/:sessionId", async (request) => {
     const { sessionId } = readParams<{ sessionId: string }>(request);
     const body = readBody<{ name?: unknown }>(request);
     await context.tmux.renameSession(sessionId, readRequiredName(body.name));
-    return context.tmux.tree(context.metadata.getPreferences().lastPaneId);
+    const tree = await context.tmux.tree(context.metadata.getPreferences().lastPaneId);
+    treeBroadcaster.publish(tree);
+    return tree;
   });
 
   app.delete("/api/sessions/:sessionId", async (request) => {
     const { sessionId } = readParams<{ sessionId: string }>(request);
     await context.tmux.killSession(sessionId);
-    return context.tmux.tree(null);
+    const tree = await context.tmux.tree(null);
+    treeBroadcaster.publish(tree);
+    return tree;
   });
 
   app.post("/api/windows", async (request) => {
@@ -75,20 +86,26 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       throw badRequest("sessionId is required", "missing_session_id");
     }
     const paneId = await context.tmux.createWindow(body.sessionId, readOptionalName(body.name));
-    return context.tmux.tree(paneId ?? context.metadata.getPreferences().lastPaneId);
+    const tree = await context.tmux.tree(paneId ?? context.metadata.getPreferences().lastPaneId);
+    treeBroadcaster.publish(tree);
+    return tree;
   });
 
   app.patch("/api/windows/:windowId", async (request) => {
     const { windowId } = readParams<{ windowId: string }>(request);
     const body = readBody<{ name?: unknown }>(request);
     await context.tmux.renameWindow(windowId, readRequiredName(body.name));
-    return context.tmux.tree(context.metadata.getPreferences().lastPaneId);
+    const tree = await context.tmux.tree(context.metadata.getPreferences().lastPaneId);
+    treeBroadcaster.publish(tree);
+    return tree;
   });
 
   app.delete("/api/windows/:windowId", async (request) => {
     const { windowId } = readParams<{ windowId: string }>(request);
     await context.tmux.killWindow(windowId);
-    return context.tmux.tree(context.metadata.getPreferences().lastPaneId);
+    const tree = await context.tmux.tree(context.metadata.getPreferences().lastPaneId);
+    treeBroadcaster.publish(tree);
+    return tree;
   });
 
   app.post("/api/panes/:paneId/split", async (request) => {
@@ -96,7 +113,9 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     const body = readBody<{ direction?: unknown }>(request);
     const direction = body.direction === "vertical" ? "vertical" : "horizontal";
     await context.tmux.splitPane(paneId, direction);
-    return context.tmux.tree(paneId);
+    const tree = await context.tmux.tree(paneId);
+    treeBroadcaster.publish(tree);
+    return tree;
   });
 
   app.patch("/api/panes/:paneId/resize", async (request) => {
@@ -108,13 +127,17 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       rows?: number;
     }>(request);
     await context.tmux.resizePane(paneId, body);
-    return context.tmux.tree(paneId);
+    const tree = await context.tmux.tree(paneId);
+    treeBroadcaster.publish(tree);
+    return tree;
   });
 
   app.delete("/api/panes/:paneId", async (request) => {
     const { paneId } = readParams<{ paneId: string }>(request);
     await context.tmux.killPane(paneId);
-    return context.tmux.tree(null);
+    const tree = await context.tmux.tree(null);
+    treeBroadcaster.publish(tree);
+    return tree;
   });
 
   app.get("/api/preferences", async () => context.metadata.getPreferences());
@@ -162,6 +185,117 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
       socket.close(1011, "attach failed");
     }
   });
+
+  app.get("/ws/tree", { websocket: true }, async (socket, request) => {
+    const token = readTokenFromWebSocketRequest(request);
+    if (!context.auth.verifyToken(token)) {
+      socket.close(1008, "unauthorized");
+      return;
+    }
+
+    treeBroadcaster.add(socket);
+  });
+}
+
+class TreeBroadcaster {
+  private readonly sockets = new Set<WebSocket>();
+  private interval: ReturnType<typeof setInterval> | null = null;
+  private lastSignature: string | null = null;
+  private refreshInFlight = false;
+
+  constructor(private readonly context: RouteContext) {}
+
+  add(socket: WebSocket): void {
+    this.sockets.add(socket);
+    socket.on("message", (data) => this.handleMessage(socket, data));
+    socket.on("close", () => this.delete(socket));
+    socket.on("error", () => this.delete(socket));
+    this.start();
+    void this.refresh({ force: true });
+  }
+
+  publish(tree: TmuxTree): void {
+    this.sendTreeIfChanged(tree, { force: true });
+  }
+
+  private delete(socket: WebSocket): void {
+    this.sockets.delete(socket);
+    if (this.sockets.size === 0) {
+      this.stop();
+    }
+  }
+
+  private start(): void {
+    if (this.interval) {
+      return;
+    }
+
+    this.interval = setInterval(() => {
+      void this.refresh();
+    }, TREE_REFRESH_MS);
+  }
+
+  private stop(): void {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+    this.lastSignature = null;
+  }
+
+  private async refresh(options: { force?: boolean } = {}): Promise<void> {
+    if (this.refreshInFlight || this.sockets.size === 0) {
+      return;
+    }
+
+    this.refreshInFlight = true;
+    try {
+      const tree = await this.context.tmux.tree(this.context.metadata.getPreferences().lastPaneId);
+      this.sendTreeIfChanged(tree, options);
+    } catch (error) {
+      this.broadcast({
+        type: "error",
+        code: "tree_refresh_failed",
+        message: error instanceof Error ? error.message : "Unable to refresh tmux tree"
+      });
+    } finally {
+      this.refreshInFlight = false;
+    }
+  }
+
+  private sendTreeIfChanged(tree: TmuxTree, options: { force?: boolean } = {}): void {
+    if (this.sockets.size === 0) {
+      return;
+    }
+
+    const signature = treeSignature(tree);
+    if (!options.force && signature === this.lastSignature) {
+      return;
+    }
+
+    this.lastSignature = signature;
+    this.broadcast({ type: "tree", tree });
+  }
+
+  private handleMessage(socket: WebSocket, data: RawData): void {
+    let message: TreeClientMessage;
+    try {
+      message = JSON.parse(rawDataToString(data)) as TreeClientMessage;
+    } catch {
+      sendTreeMessage(socket, { type: "error", code: "invalid_message", message: "Tree message must be JSON" });
+      return;
+    }
+
+    if (message.type === "ping") {
+      sendTreeMessage(socket, { type: "pong", id: message.id });
+    }
+  }
+
+  private broadcast(message: TreeServerMessage): void {
+    for (const socket of this.sockets) {
+      sendTreeMessage(socket, message);
+    }
+  }
 }
 
 function readBody<T>(request: FastifyRequest): T {
@@ -209,4 +343,33 @@ function readTokenFromWebSocketRequest(request: FastifyRequest): string | null {
 function readPaneIdFromRequest(request: FastifyRequest): string | null {
   const queryPaneId = (request.query as { paneId?: unknown }).paneId;
   return typeof queryPaneId === "string" && queryPaneId ? queryPaneId : null;
+}
+
+function sendTreeMessage(socket: WebSocket, message: TreeServerMessage): void {
+  if (socket.readyState === 1) {
+    socket.send(JSON.stringify(message));
+  }
+}
+
+function treeSignature(tree: TmuxTree): string {
+  return JSON.stringify({
+    ...tree,
+    updatedAt: undefined
+  });
+}
+
+function rawDataToString(data: RawData): string {
+  if (typeof data === "string") {
+    return data;
+  }
+
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString("utf8");
+  }
+
+  return data.toString("utf8");
 }

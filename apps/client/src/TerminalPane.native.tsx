@@ -218,6 +218,8 @@ function terminalHtml(wsUrl: string): string {
     let nativeViewportWidth;
     let nativeViewportHeight;
     let pendingViewportFit = 0;
+    let pendingBottomScrollFrame = 0;
+    let pendingBottomScrollTimers = [];
     let lastSentCols;
     let lastSentRows;
     let followBottomUntil = 0;
@@ -361,9 +363,22 @@ function terminalHtml(wsUrl: string): string {
 
     function keepTerminalBottomVisible() {
       scrollTerminalToBottom();
-      requestAnimationFrame(scrollTerminalToBottom);
-      setTimeout(scrollTerminalToBottom, 50);
-      setTimeout(scrollTerminalToBottom, 150);
+      if (pendingBottomScrollFrame || pendingBottomScrollTimers.length > 0) {
+        return;
+      }
+
+      pendingBottomScrollFrame = requestAnimationFrame(() => {
+        pendingBottomScrollFrame = 0;
+        scrollTerminalToBottom();
+      });
+
+      pendingBottomScrollTimers = [50, 150].map((delay) => {
+        const timeoutId = setTimeout(() => {
+          pendingBottomScrollTimers = pendingBottomScrollTimers.filter((timer) => timer !== timeoutId);
+          scrollTerminalToBottom();
+        }, delay);
+        return timeoutId;
+      });
     }
 
     function scrollTerminalToBottom() {

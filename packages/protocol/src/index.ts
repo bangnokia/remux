@@ -29,6 +29,7 @@ export interface TmuxWindow {
   id: TmuxId;
   index: number;
   name: string;
+  displayName?: string;
   active: boolean;
   panes: TmuxPane[];
   paneCount: number;
@@ -104,5 +105,13 @@ export type TerminalServerMessage =
   | { type: "output"; paneId: string; data: string }
   | { type: "treeChanged" }
   | { type: "paneExited"; paneId: string }
+  | { type: "error"; code: string; message: string }
+  | { type: "pong"; id: string };
+
+export type TreeClientMessage =
+  | { type: "ping"; id: string };
+
+export type TreeServerMessage =
+  | { type: "tree"; tree: TmuxTree }
   | { type: "error"; code: string; message: string }
   | { type: "pong"; id: string };

@@ -96,6 +96,15 @@ export class TelemuxClient {
     return url.toString();
   }
 
+  treeWebSocketUrl(): string {
+    const url = new URL(`${this.baseUrl}/ws/tree`);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    if (this.token) {
+      url.searchParams.set("token", this.token);
+    }
+    return url.toString();
+  }
+
   private async request<T>(
     path: string,
     options: { method?: string; body?: unknown } = {}
