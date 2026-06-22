@@ -69,8 +69,10 @@ describe("formatSnapshotForTerminal", () => {
 });
 
 describe("TerminalBridge snapshots", () => {
-  it("reports the WebSocket viewport size when one has been received", async () => {
+  it("waits for tmux to report the WebSocket viewport size before capturing", async () => {
     const sentMessages: unknown[] = [];
+    const calls: string[] = [];
+    let paneSizeCalls = 0;
     const socket = {
       OPEN: 1,
       readyState: 1,
@@ -81,8 +83,17 @@ describe("TerminalBridge snapshots", () => {
     const bridge = new TerminalBridge(
       socket as never,
       {
-        capturePane: async () => "prompt\n",
-        paneSize: async () => ({ cols: 160, rows: 48, cursorX: 6, cursorY: 0 })
+        capturePane: async () => {
+          calls.push("capture");
+          return "prompt\n";
+        },
+        paneSize: async () => {
+          calls.push("size");
+          paneSizeCalls += 1;
+          return paneSizeCalls === 1
+            ? { cols: 160, rows: 48, cursorX: 0, cursorY: 0 }
+            : { cols: 44, rows: 16, cursorX: 6, cursorY: 0 };
+        }
       } as never,
       { updatePreferences: () => undefined } as never,
       { paneId: "%1", sessionId: "$1" }
@@ -90,8 +101,9 @@ describe("TerminalBridge snapshots", () => {
 
     bridge["clientCols"] = 44;
     bridge["clientRows"] = 16;
-    await bridge["sendSnapshot"]();
+    await bridge["sendSnapshot"]({ waitForResize: true });
 
+    expect(calls).toEqual(["size", "size", "capture"]);
     expect(sentMessages).toEqual([
       {
         type: "snapshot",

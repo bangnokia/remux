@@ -22,7 +22,7 @@ import {
 } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, AppState, Easing, Keyboard as NativeKeyboard, TextInput as NativeTextInput } from "react-native";
-import type { AppStateStatus } from "react-native";
+import type { AppStateStatus, KeyboardEvent } from "react-native";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -77,14 +77,12 @@ const COMMAND_KEYBOARD_PROXY_SELECTION = {
 type CommandProgress = InstanceType<typeof Animated.Value>;
 
 export default function App(): React.ReactElement {
-  const { height: windowHeight, width } = useWindowDimensions();
+  const { width } = useWindowDimensions();
   const wide = width >= 760;
   const sheetWidth = Math.max(0, width - 32);
   const terminalRef = useRef<TerminalPaneHandle>(null);
   const keyboardOffset = useRef(new Animated.Value(0)).current;
-  const currentWindowHeightRef = useRef(windowHeight);
-  const keyboardClosedWindowHeightRef = useRef(windowHeight);
-  const lastKeyboardHeightRef = useRef(0);
+  const keyboardVisibleRef = useRef(false);
   const pendingRenameTargetRef = useRef<RenameTarget>(null);
   const pendingTreeRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTreeSignatureRef = useRef<string | null>(null);
@@ -344,37 +342,15 @@ export default function App(): React.ReactElement {
   }, [client, selectedPaneId]);
 
   useEffect(() => {
-    currentWindowHeightRef.current = windowHeight;
-    if (!keyboardVisible) {
-      keyboardClosedWindowHeightRef.current = windowHeight;
-      return;
-    }
-
-    if (Platform.OS === "android") {
-      updateKeyboardInset(
-        lastKeyboardHeightRef.current,
-        keyboardClosedWindowHeightRef.current,
-        windowHeight,
-        setKeyboardInset
-      );
-    }
-  }, [keyboardVisible, windowHeight]);
-
-  useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
     const showSubscription = NativeKeyboard.addListener(showEvent, (event) => {
-      const height = Math.max(0, event.endCoordinates?.height ?? 0);
+      const height = keyboardEventHeight(event);
       setKeyboardVisible(true);
+      keyboardVisibleRef.current = true;
       if (Platform.OS === "android") {
-        lastKeyboardHeightRef.current = height;
-        updateKeyboardInset(
-          height,
-          keyboardClosedWindowHeightRef.current,
-          currentWindowHeightRef.current,
-          setKeyboardInset
-        );
+        setKeyboardInset(height);
       }
       Animated.timing(keyboardOffset, {
         duration: Math.max(120, event.duration ?? 220),
@@ -386,8 +362,8 @@ export default function App(): React.ReactElement {
 
     const hideSubscription = NativeKeyboard.addListener(hideEvent, (event) => {
       setKeyboardVisible(false);
+      keyboardVisibleRef.current = false;
       if (Platform.OS === "android") {
-        lastKeyboardHeightRef.current = 0;
         setKeyboardInset(0);
       }
       Animated.timing(keyboardOffset, {
@@ -398,9 +374,25 @@ export default function App(): React.ReactElement {
       }).start();
     });
 
+    const changeSubscription = Platform.OS === "android"
+      ? NativeKeyboard.addListener("keyboardDidChangeFrame", (event) => {
+          if (!keyboardVisibleRef.current) {
+            return;
+          }
+
+          const height = keyboardEventHeight(event);
+          if (height <= 0) {
+            return;
+          }
+
+          setKeyboardInset(height);
+        })
+      : null;
+
     return () => {
       showSubscription.remove();
       hideSubscription.remove();
+      changeSubscription?.remove();
     };
   }, [keyboardOffset]);
 
@@ -1457,16 +1449,9 @@ function keyboardLiftTranslateY(keyboardOffset: CommandProgress): 0 | ReturnType
   return Platform.OS === "android" ? 0 : Animated.multiply(keyboardOffset, -1);
 }
 
-function updateKeyboardInset(
-  keyboardHeight: number,
-  closedWindowHeight: number,
-  currentWindowHeight: number,
-  setKeyboardInset: React.Dispatch<React.SetStateAction<number>>
-): void {
-  const resizedByNative = Math.max(0, closedWindowHeight - currentWindowHeight);
-  const nextInset = Math.max(0, Math.ceil(keyboardHeight - resizedByNative));
-  const normalizedInset = nextInset < 24 ? 0 : nextInset;
-  setKeyboardInset((current) => current === normalizedInset ? current : normalizedInset);
+function keyboardEventHeight(event: KeyboardEvent): number {
+  const height = Math.max(0, Math.ceil(event.endCoordinates?.height ?? 0));
+  return height < 24 ? 0 : height;
 }
 
 function CommandKeyboardButton({

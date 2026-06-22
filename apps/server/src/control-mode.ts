@@ -5,6 +5,9 @@ import type { MetadataStore } from "./metadata.js";
 import type { TmuxService } from "./tmux.js";
 
 const TERMINAL_SNAPSHOT_HISTORY_LINES = 2000;
+const RESIZE_SNAPSHOT_DEBOUNCE_MS = 80;
+const RESIZE_SNAPSHOT_WAIT_MS = 240;
+const RESIZE_SNAPSHOT_POLL_MS = 24;
 
 export class TerminalBridge {
   private process: ChildProcessWithoutNullStreams | null = null;
@@ -13,6 +16,9 @@ export class TerminalBridge {
   private readonly outputSanitizer = new TerminalOutputSanitizer();
   private clientCols: number | null = null;
   private clientRows: number | null = null;
+  private pendingSnapshotTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingResizeSnapshot = false;
+  private snapshotQueue: Promise<void> = Promise.resolve();
   private paneId: string;
   private sessionId: string;
   private suppressControlExitNotification = false;
@@ -46,6 +52,11 @@ export class TerminalBridge {
   }
 
   dispose(): void {
+    if (this.pendingSnapshotTimer) {
+      clearTimeout(this.pendingSnapshotTimer);
+      this.pendingSnapshotTimer = null;
+    }
+    this.pendingResizeSnapshot = false;
     if (this.process && !this.process.killed) {
       this.suppressControlExitNotification = true;
       this.writeControlCommand("detach-client");
@@ -80,7 +91,8 @@ export class TerminalBridge {
         this.clientCols = cols;
         this.clientRows = rows;
         this.applyControlClientSize();
-        await this.sendSnapshot();
+        this.pendingResizeSnapshot = true;
+        this.scheduleSnapshot();
       } else if (message.type === "focus") {
         const target = await this.tmux.findPane(message.paneId);
         this.paneId = message.paneId;
@@ -90,11 +102,11 @@ export class TerminalBridge {
           this.sessionId = target.sessionId;
           this.dispose();
           this.spawnControlClient();
+          this.scheduleSnapshot();
         } else {
           this.writeControlCommand(`refresh-client -A ${this.paneId}:on`);
+          await this.sendSnapshot();
         }
-
-        await this.sendSnapshot();
       } else if (message.type === "ping") {
         this.send({ type: "pong", id: message.id });
       }
@@ -130,17 +142,15 @@ export class TerminalBridge {
     this.applyControlClientSize();
   }
 
-  private async sendSnapshot(): Promise<void> {
-    const [data, size] = await Promise.all([
-      this.tmux.capturePane(this.paneId, TERMINAL_SNAPSHOT_HISTORY_LINES),
-      this.tmux.paneSize(this.paneId)
-    ]);
+  private async sendSnapshot(options: { waitForResize?: boolean } = {}): Promise<void> {
+    const size = options.waitForResize ? await this.waitForResizedPaneSize() : await this.tmux.paneSize(this.paneId);
+    const data = await this.tmux.capturePane(this.paneId, TERMINAL_SNAPSHOT_HISTORY_LINES);
     this.send({
       type: "snapshot",
       paneId: this.paneId,
       data: formatSnapshotForTerminal(data, size.cursorX, size.cursorY),
-      cols: this.clientCols ?? size.cols,
-      rows: this.clientRows ?? size.rows
+      cols: size.cols,
+      rows: size.rows
     });
   }
 
@@ -194,6 +204,56 @@ export class TerminalBridge {
     if (this.clientCols && this.clientRows) {
       this.writeControlCommand(`refresh-client -C ${this.clientCols}x${this.clientRows}`);
     }
+  }
+
+  private scheduleSnapshot(): void {
+    if (this.pendingSnapshotTimer) {
+      clearTimeout(this.pendingSnapshotTimer);
+    }
+
+    this.pendingSnapshotTimer = setTimeout(() => {
+      this.pendingSnapshotTimer = null;
+      const waitForResize = this.pendingResizeSnapshot;
+      this.pendingResizeSnapshot = false;
+      this.snapshotQueue = this.snapshotQueue
+        .then(() => this.sendSnapshot({ waitForResize }))
+        .catch((error) => {
+          this.send({
+            type: "error",
+            code: "terminal_snapshot_failed",
+            message: error instanceof Error ? error.message : "Unable to refresh terminal snapshot"
+          });
+        });
+    }, RESIZE_SNAPSHOT_DEBOUNCE_MS);
+  }
+
+  private async waitForResizedPaneSize(): Promise<{ cols: number; rows: number; cursorX: number; cursorY: number }> {
+    const targetCols = this.clientCols;
+    const targetRows = this.clientRows;
+    if (!targetCols || !targetRows) {
+      return this.tmux.paneSize(this.paneId);
+    }
+
+    const deadline = Date.now() + RESIZE_SNAPSHOT_WAIT_MS;
+    let size = await this.tmux.paneSize(this.paneId);
+    let observedGeometryChange = paneGeometryMatches(size, targetCols, targetRows);
+
+    while (Date.now() < deadline) {
+      if (paneGeometryMatches(size, targetCols, targetRows)) {
+        return size;
+      }
+
+      await sleep(Math.min(RESIZE_SNAPSHOT_POLL_MS, Math.max(0, deadline - Date.now())));
+      const nextSize = await this.tmux.paneSize(this.paneId);
+      if (!samePaneGeometry(size, nextSize)) {
+        observedGeometryChange = true;
+      } else if (observedGeometryChange) {
+        return nextSize;
+      }
+      size = nextSize;
+    }
+
+    return size;
   }
 
   private sendOutput(paneId: string, encodedValue: string): void {
@@ -385,4 +445,19 @@ function clampInteger(value: number, min: number, max: number): number {
   }
 
   return Math.min(Math.max(value, min), max);
+}
+
+function samePaneGeometry(
+  first: { cols: number; rows: number },
+  second: { cols: number; rows: number }
+): boolean {
+  return first.cols === second.cols && first.rows === second.rows;
+}
+
+function paneGeometryMatches(size: { cols: number; rows: number }, cols: number, rows: number): boolean {
+  return size.cols === cols && size.rows === rows;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
