@@ -7,6 +7,7 @@ import {
   TERMINAL_FONT_SIZE,
   TERMINAL_HORIZONTAL_PADDING,
   TERMINAL_LINE_HEIGHT,
+  TERMINAL_SCROLLBAR_WIDTH,
   TERMINAL_TOP_PADDING,
   resolveTerminalFontUri,
   terminalFontFaceCss
@@ -53,6 +54,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       }
 
       installGhosttyLineHeight();
+      installGhosttyScrollbarWidth();
       const terminal = new Terminal({
         cursorBlink: true,
         convertEol: true,
@@ -161,7 +163,7 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       window.setTimeout(() => fitTerminal(), 0);
     } else if (message.type === "output") {
       terminal?.write(message.data);
-    } else if (message.type === "treeChanged") {
+    } else if (message.type === "treeChanged" || message.type === "paneExited") {
       onTreeChanged();
     } else if (message.type === "error") {
       onStatus(message.message);
@@ -189,9 +191,28 @@ interface TerminalFontMetrics {
 }
 
 interface TeleMuxCanvasRendererPrototype {
+  canvas?: HTMLCanvasElement;
+  ctx?: CanvasRenderingContext2D;
+  devicePixelRatio?: number;
   measureFont?: () => TerminalFontMetrics;
   __telemuxOriginalMeasureFont?: () => TerminalFontMetrics;
+  __telemuxOriginalRenderScrollbar?: (
+    viewportY: number,
+    scrollbackLength: number,
+    rows: number,
+    opacity?: number
+  ) => void;
   __telemuxLineHeight?: number;
+  __telemuxScrollbarWidth?: number;
+  renderScrollbar?: (
+    viewportY: number,
+    scrollbackLength: number,
+    rows: number,
+    opacity?: number
+  ) => void;
+  theme?: {
+    background?: string;
+  };
 }
 
 function installGhosttyLineHeight(): void {
@@ -221,6 +242,59 @@ function installGhosttyLineHeight(): void {
     };
   };
   prototype.__telemuxLineHeight = TERMINAL_LINE_HEIGHT;
+}
+
+function installGhosttyScrollbarWidth(): void {
+  const prototype = (CanvasRenderer as unknown as { prototype?: TeleMuxCanvasRendererPrototype }).prototype;
+  if (!prototype?.renderScrollbar) {
+    return;
+  }
+
+  prototype.__telemuxOriginalRenderScrollbar ??= prototype.renderScrollbar;
+
+  if (prototype.__telemuxScrollbarWidth === TERMINAL_SCROLLBAR_WIDTH) {
+    return;
+  }
+
+  prototype.renderScrollbar = function renderScrollbarWithTelemuxWidth(
+    this: TeleMuxCanvasRendererPrototype,
+    viewportY: number,
+    scrollbackLength: number,
+    rows: number,
+    opacity = 1
+  ): void {
+    const { canvas, ctx } = this;
+    const originalRenderScrollbar = prototype.__telemuxOriginalRenderScrollbar;
+    if (!canvas || !ctx || !originalRenderScrollbar) {
+      originalRenderScrollbar?.call(this, viewportY, scrollbackLength, rows, opacity);
+      return;
+    }
+
+    const devicePixelRatio = this.devicePixelRatio ?? 1;
+    const height = canvas.height / devicePixelRatio;
+    const width = canvas.width / devicePixelRatio;
+    const scrollbarWidth = TERMINAL_SCROLLBAR_WIDTH;
+    const scrollbarX = width - scrollbarWidth - 4;
+    const margin = 4;
+    const trackHeight = height - margin * 2;
+
+    ctx.fillStyle = this.theme?.background ?? "#0d1110";
+    ctx.fillRect(scrollbarX - 2, 0, scrollbarWidth + 6, height);
+    if (opacity <= 0 || scrollbackLength === 0) {
+      return;
+    }
+
+    const totalRows = scrollbackLength + rows;
+    const thumbHeight = Math.max(20, rows / totalRows * trackHeight);
+    const scrollRatio = viewportY / scrollbackLength;
+    const thumbY = margin + (trackHeight - thumbHeight) * (1 - scrollRatio);
+
+    ctx.fillStyle = `rgba(128, 128, 128, ${0.1 * opacity})`;
+    ctx.fillRect(scrollbarX, margin, scrollbarWidth, trackHeight);
+    ctx.fillStyle = `rgba(128, 128, 128, ${(viewportY > 0 ? 0.5 : 0.3) * opacity})`;
+    ctx.fillRect(scrollbarX, thumbY, scrollbarWidth, thumbHeight);
+  };
+  prototype.__telemuxScrollbarWidth = TERMINAL_SCROLLBAR_WIDTH;
 }
 
 function installTerminalFontFace(): () => void {

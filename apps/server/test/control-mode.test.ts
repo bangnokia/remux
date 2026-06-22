@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decodeTmuxOutput,
   formatSnapshotForTerminal,
+  isTreeChangeNotification,
   stripTerminalStringControls,
   TerminalBridge,
   TerminalOutputSanitizer
@@ -100,5 +101,15 @@ describe("TerminalBridge snapshots", () => {
         rows: 16
       }
     ]);
+  });
+});
+
+describe("isTreeChangeNotification", () => {
+  it("detects tmux notifications that mean pane or window state changed", () => {
+    expect(isTreeChangeNotification("%layout-change @0 b25d,80x24,0,0,0 b25d,80x24,0,0,0 *")).toBe(true);
+    expect(isTreeChangeNotification("%unlinked-window-close @1")).toBe(true);
+    expect(isTreeChangeNotification("%pane-exited %1")).toBe(true);
+    expect(isTreeChangeNotification("%pane-died %1")).toBe(true);
+    expect(isTreeChangeNotification("%output %1 hello")).toBe(false);
   });
 });

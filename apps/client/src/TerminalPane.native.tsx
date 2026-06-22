@@ -8,6 +8,7 @@ import {
   TERMINAL_FONT_SIZE,
   TERMINAL_HORIZONTAL_PADDING,
   TERMINAL_LINE_HEIGHT,
+  TERMINAL_SCROLLBAR_WIDTH,
   TERMINAL_TOP_PADDING,
   resolveTerminalFontUris,
   terminalFontFaceCss
@@ -210,6 +211,7 @@ function terminalHtml(wsUrl: string): string {
     const terminalFontSize = ${encodedTerminalFontSize};
     const terminalLineHeight = ${encodedTerminalLineHeight};
     const terminalHorizontalPadding = ${encodedTerminalHorizontalPadding};
+    const terminalScrollbarWidth = ${TERMINAL_SCROLLBAR_WIDTH};
     const terminalTopPadding = ${TERMINAL_TOP_PADDING};
     const touchScrollLinePx = 22;
 
@@ -261,6 +263,7 @@ function terminalHtml(wsUrl: string): string {
       const { CanvasRenderer, FitAddon, Terminal, init } = await importGhostty();
       await init();
       installGhosttyLineHeight(CanvasRenderer);
+      installGhosttyScrollbarWidth(CanvasRenderer);
       term = new Terminal({
         cursorBlink: true,
         convertEol: true,
@@ -303,7 +306,7 @@ function terminalHtml(wsUrl: string): string {
           if (shouldFollowBottom) {
             keepTerminalBottomVisible();
           }
-        } else if (message.type === 'treeChanged') {
+        } else if (message.type === 'treeChanged' || message.type === 'paneExited') {
           post({ type: 'treeChanged' });
         } else if (message.type === 'error') {
           post({ type: 'status', value: message.message });
@@ -515,6 +518,47 @@ function terminalHtml(wsUrl: string): string {
         };
       };
       prototype.__telemuxLineHeight = terminalLineHeight;
+    }
+
+    function installGhosttyScrollbarWidth(CanvasRenderer) {
+      const prototype = CanvasRenderer && CanvasRenderer.prototype;
+      if (!prototype || typeof prototype.renderScrollbar !== 'function') return;
+
+      if (!prototype.__telemuxOriginalRenderScrollbar) {
+        prototype.__telemuxOriginalRenderScrollbar = prototype.renderScrollbar;
+      }
+
+      if (prototype.__telemuxScrollbarWidth === terminalScrollbarWidth) return;
+
+      prototype.renderScrollbar = function renderScrollbarWithTelemuxWidth(viewportY, scrollbackLength, rows, opacity = 1) {
+        const ctx = this.ctx;
+        const canvas = this.canvas;
+        const devicePixelRatio = this.devicePixelRatio || 1;
+        if (!ctx || !canvas) {
+          return prototype.__telemuxOriginalRenderScrollbar.call(this, viewportY, scrollbackLength, rows, opacity);
+        }
+
+        const height = canvas.height / devicePixelRatio;
+        const width = canvas.width / devicePixelRatio;
+        const scrollbarWidth = terminalScrollbarWidth;
+        const scrollbarX = width - scrollbarWidth - 4;
+        const margin = 4;
+        const trackHeight = height - margin * 2;
+
+        ctx.fillStyle = this.theme && this.theme.background ? this.theme.background : '#0d1110';
+        ctx.fillRect(scrollbarX - 2, 0, scrollbarWidth + 6, height);
+        if (opacity <= 0 || scrollbackLength === 0) return;
+
+        const totalRows = scrollbackLength + rows;
+        const thumbHeight = Math.max(20, rows / totalRows * trackHeight);
+        const scrollRatio = viewportY / scrollbackLength;
+        const thumbY = margin + (trackHeight - thumbHeight) * (1 - scrollRatio);
+        ctx.fillStyle = 'rgba(128, 128, 128, ' + (0.1 * opacity) + ')';
+        ctx.fillRect(scrollbarX, margin, scrollbarWidth, trackHeight);
+        ctx.fillStyle = 'rgba(128, 128, 128, ' + ((viewportY > 0 ? 0.5 : 0.3) * opacity) + ')';
+        ctx.fillRect(scrollbarX, thumbY, scrollbarWidth, thumbHeight);
+      };
+      prototype.__telemuxScrollbarWidth = terminalScrollbarWidth;
     }
 
     function hideNativeCaret() {

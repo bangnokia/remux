@@ -94,12 +94,12 @@ export class TmuxService {
     };
   }
 
-  async createSession(name?: string): Promise<void> {
-    const args = ["new-session", "-d"];
+  async createSession(name?: string): Promise<string | null> {
+    const args = ["new-session", "-d", "-P", "-F", "#{pane_id}"];
     if (name) {
       args.push("-s", name);
     }
-    await this.run(args);
+    return this.readCreatedPaneId(await this.run(args));
   }
 
   async renameSession(sessionId: string, name: string): Promise<void> {
@@ -111,12 +111,12 @@ export class TmuxService {
     await this.run(["kill-session", "-t", sessionId]);
   }
 
-  async createWindow(sessionId: string, name?: string): Promise<void> {
-    const args = ["new-window", "-d", "-t", sessionId];
+  async createWindow(sessionId: string, name?: string): Promise<string | null> {
+    const args = ["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", sessionId];
     if (name) {
       args.push("-n", name);
     }
-    await this.run(args);
+    return this.readCreatedPaneId(await this.run(args));
   }
 
   async renameWindow(windowId: string, name: string): Promise<void> {
@@ -331,6 +331,11 @@ export class TmuxService {
       const message = error instanceof Error ? error.message : "tmux command failed";
       throw badRequest(message, "tmux_command_failed");
     }
+  }
+
+  private readCreatedPaneId(output: string): string | null {
+    const paneId = output.trim();
+    return paneId.startsWith("%") ? paneId : null;
   }
 }
 

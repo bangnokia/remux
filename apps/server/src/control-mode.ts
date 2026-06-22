@@ -15,6 +15,7 @@ export class TerminalBridge {
   private clientRows: number | null = null;
   private paneId: string;
   private sessionId: string;
+  private suppressControlExitNotification = false;
 
   constructor(
     private readonly socket: WebSocket,
@@ -46,6 +47,7 @@ export class TerminalBridge {
 
   dispose(): void {
     if (this.process && !this.process.killed) {
+      this.suppressControlExitNotification = true;
       this.writeControlCommand("detach-client");
       this.process.kill();
     }
@@ -121,6 +123,7 @@ export class TerminalBridge {
     });
     this.process.on("exit", () => {
       this.process = null;
+      this.suppressControlExitNotification = false;
     });
 
     this.writeControlCommand(`refresh-client -A ${this.paneId}:on`);
@@ -176,7 +179,10 @@ export class TerminalBridge {
     }
 
     if (line.startsWith("%exit")) {
-      this.send({ type: "error", code: "tmux_control_exit", message: line });
+      if (!this.suppressControlExitNotification) {
+        this.send({ type: "paneExited", paneId: this.paneId });
+      }
+      return;
     }
   }
 
@@ -357,11 +363,15 @@ function isC1StringControlStarter(char: string): boolean {
   return char === "\u0090" || char === "\u0098" || char === "\u009d" || char === "\u009e" || char === "\u009f";
 }
 
-function isTreeChangeNotification(line: string): boolean {
+export function isTreeChangeNotification(line: string): boolean {
   return (
+    line.startsWith("%layout-change") ||
+    line.startsWith("%pane-died") ||
+    line.startsWith("%pane-exited") ||
     line.startsWith("%sessions-changed") ||
     line.startsWith("%session-renamed") ||
     line.startsWith("%session-window-changed") ||
+    line.startsWith("%unlinked-window-close") ||
     line.startsWith("%window-add") ||
     line.startsWith("%window-close") ||
     line.startsWith("%window-renamed") ||

@@ -83,6 +83,7 @@ export default function App(): React.ReactElement {
   const keyboardClosedWindowHeightRef = useRef(windowHeight);
   const lastKeyboardHeightRef = useRef(0);
   const pendingRenameTargetRef = useRef<RenameTarget>(null);
+  const pendingTreeRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connections, setConnections] = useState<SavedConnection[]>([]);
   const [connection, setConnection] = useState<SavedConnection | null>(null);
   const [setupLabel, setSetupLabel] = useState("");
@@ -123,7 +124,14 @@ export default function App(): React.ReactElement {
   }, [client]);
 
   const handleTreeChanged = useCallback(() => {
-    void refreshTree();
+    if (pendingTreeRefreshRef.current) {
+      clearTimeout(pendingTreeRefreshRef.current);
+    }
+
+    pendingTreeRefreshRef.current = setTimeout(() => {
+      pendingTreeRefreshRef.current = null;
+      void refreshTree();
+    }, 80);
   }, [refreshTree]);
 
   useEffect(() => {
@@ -131,6 +139,12 @@ export default function App(): React.ReactElement {
       setConnections(saved);
       setLoading(false);
     });
+  }, []);
+
+  useEffect(() => () => {
+    if (pendingTreeRefreshRef.current) {
+      clearTimeout(pendingTreeRefreshRef.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -304,6 +318,8 @@ export default function App(): React.ReactElement {
       setTree(nextTree);
       if (selectPane !== undefined) {
         setSelectedPaneId(selectPane);
+      } else if (nextTree.activePaneId && paneExists(nextTree, nextTree.activePaneId)) {
+        setSelectedPaneId(nextTree.activePaneId);
       } else if (!selectedPaneId || !paneExists(nextTree, selectedPaneId)) {
         setSelectedPaneId(firstPaneId(nextTree));
       }

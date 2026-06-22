@@ -32,11 +32,29 @@ describe.runIf(() => hasTmux)("TmuxService", () => {
 
     expect((await tmux.tree()).sessions).toHaveLength(0);
 
-    await tmux.createSession("telemux_test");
+    const firstPaneId = await tmux.createSession("telemux_test");
     const tree = await tmux.tree();
 
     expect(tree.sessions).toHaveLength(1);
     expect(tree.sessions[0].name).toBe("telemux_test");
     expect(tree.sessions[0].windows[0].panes[0].id).toMatch(/^%/);
+    expect(firstPaneId).toBe(tree.sessions[0].windows[0].panes[0].id);
+  });
+
+  it("returns the new pane id when creating a window", async () => {
+    const socketName = `telemux-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    sockets.push(socketName);
+    const tmux = new TmuxService(socketName);
+
+    await tmux.createSession("telemux_test");
+    const initialTree = await tmux.tree();
+    const sessionId = initialTree.sessions[0].id;
+    const paneId = await tmux.createWindow(sessionId);
+    const tree = await tmux.tree(paneId);
+
+    expect(paneId).toMatch(/^%/);
+    expect(tree.activePaneId).toBe(paneId);
+    expect(tree.sessions[0].windows).toHaveLength(2);
+    expect(tree.sessions[0].windows.some((window) => window.panes.some((pane) => pane.id === paneId))).toBe(true);
   });
 });

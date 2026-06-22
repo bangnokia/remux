@@ -52,8 +52,8 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
 
   app.post("/api/sessions", async (request) => {
     const body = readBody<{ name?: unknown }>(request);
-    await context.tmux.createSession(readOptionalName(body.name));
-    return context.tmux.tree(context.metadata.getPreferences().lastPaneId);
+    const paneId = await context.tmux.createSession(readOptionalName(body.name));
+    return context.tmux.tree(paneId ?? context.metadata.getPreferences().lastPaneId);
   });
 
   app.patch("/api/sessions/:sessionId", async (request) => {
@@ -74,8 +74,8 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
     if (typeof body.sessionId !== "string") {
       throw badRequest("sessionId is required", "missing_session_id");
     }
-    await context.tmux.createWindow(body.sessionId, readOptionalName(body.name));
-    return context.tmux.tree(context.metadata.getPreferences().lastPaneId);
+    const paneId = await context.tmux.createWindow(body.sessionId, readOptionalName(body.name));
+    return context.tmux.tree(paneId ?? context.metadata.getPreferences().lastPaneId);
   });
 
   app.patch("/api/windows/:windowId", async (request) => {

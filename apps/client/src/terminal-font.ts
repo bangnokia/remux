@@ -9,6 +9,7 @@ export const TERMINAL_FONT_FAMILY = `"${TERMINAL_FONT_FACE}", "Ioskeley Mono", M
 export const TERMINAL_FONT_SIZE = 12;
 export const TERMINAL_LINE_HEIGHT = 1.25;
 export const TERMINAL_HORIZONTAL_PADDING = 4;
+export const TERMINAL_SCROLLBAR_WIDTH = 4;
 export const TERMINAL_TOP_PADDING = 4;
 
 export function resolveTerminalFontUri(): string | null {
