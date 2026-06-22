@@ -5,6 +5,7 @@ import {
   TERMINAL_FONT_FACE,
   TERMINAL_FONT_FAMILY,
   TERMINAL_FONT_SIZE,
+  TERMINAL_HORIZONTAL_PADDING,
   TERMINAL_LINE_HEIGHT,
   TERMINAL_TOP_PADDING,
   resolveTerminalFontUri,
@@ -258,6 +259,8 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     flex: 1,
     minHeight: 0,
+    paddingLeft: TERMINAL_HORIZONTAL_PADDING,
+    paddingRight: TERMINAL_HORIZONTAL_PADDING,
     paddingTop: TERMINAL_TOP_PADDING,
     position: "relative",
     width: "100%"

@@ -28,6 +28,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  SafeAreaProvider,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -35,7 +36,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  statusBarHeight,
   useWindowDimensions,
   View
 } from "./src/rn";
@@ -74,11 +74,14 @@ const COMMAND_KEYBOARD_PROXY_SELECTION = {
 type CommandProgress = InstanceType<typeof Animated.Value>;
 
 export default function App(): React.ReactElement {
-  const { width } = useWindowDimensions();
+  const { height: windowHeight, width } = useWindowDimensions();
   const wide = width >= 760;
   const sheetWidth = Math.max(0, width - 32);
   const terminalRef = useRef<TerminalPaneHandle>(null);
   const keyboardOffset = useRef(new Animated.Value(0)).current;
+  const currentWindowHeightRef = useRef(windowHeight);
+  const keyboardClosedWindowHeightRef = useRef(windowHeight);
+  const lastKeyboardHeightRef = useRef(0);
   const pendingRenameTargetRef = useRef<RenameTarget>(null);
   const [connections, setConnections] = useState<SavedConnection[]>([]);
   const [connection, setConnection] = useState<SavedConnection | null>(null);
@@ -91,15 +94,16 @@ export default function App(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [connectingConnectionId, setConnectingConnectionId] = useState<string | null>(null);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  const [keyboardInset, setKeyboardInset] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
 
   const client = useMemo(() => (connection ? new TelemuxClient(connection) : null), [connection]);
   const selected = useMemo(() => findSelectedTarget(tree, selectedPaneId), [tree, selectedPaneId]);
   const terminalUrl = client && selectedPaneId ? client.terminalWebSocketUrl(selectedPaneId) : null;
-  const commandBarBottomInset = Platform.OS === "android" ? ANDROID_COMMAND_BAR_BOTTOM_INSET : 0;
+  const commandBarBottomInset = Platform.OS === "android" ? ANDROID_COMMAND_BAR_BOTTOM_INSET + keyboardInset : 0;
   const terminalBottomInset = COMMAND_BAR_HEIGHT + commandBarBottomInset;
-  const terminalTranslateY = Animated.multiply(keyboardOffset, -1);
+  const terminalTranslateY = keyboardLiftTranslateY(keyboardOffset);
 
   const refreshTree = useCallback(async () => {
     if (!client) {
@@ -171,12 +175,38 @@ export default function App(): React.ReactElement {
   }, [client, selectedPaneId]);
 
   useEffect(() => {
+    currentWindowHeightRef.current = windowHeight;
+    if (!keyboardVisible) {
+      keyboardClosedWindowHeightRef.current = windowHeight;
+      return;
+    }
+
+    if (Platform.OS === "android") {
+      updateKeyboardInset(
+        lastKeyboardHeightRef.current,
+        keyboardClosedWindowHeightRef.current,
+        windowHeight,
+        setKeyboardInset
+      );
+    }
+  }, [keyboardVisible, windowHeight]);
+
+  useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
     const showSubscription = NativeKeyboard.addListener(showEvent, (event) => {
       const height = Math.max(0, event.endCoordinates?.height ?? 0);
       setKeyboardVisible(true);
+      if (Platform.OS === "android") {
+        lastKeyboardHeightRef.current = height;
+        updateKeyboardInset(
+          height,
+          keyboardClosedWindowHeightRef.current,
+          currentWindowHeightRef.current,
+          setKeyboardInset
+        );
+      }
       Animated.timing(keyboardOffset, {
         duration: Math.max(120, event.duration ?? 220),
         easing: Easing.out(Easing.cubic),
@@ -187,6 +217,10 @@ export default function App(): React.ReactElement {
 
     const hideSubscription = NativeKeyboard.addListener(hideEvent, (event) => {
       setKeyboardVisible(false);
+      if (Platform.OS === "android") {
+        lastKeyboardHeightRef.current = 0;
+        setKeyboardInset(0);
+      }
       Animated.timing(keyboardOffset, {
         duration: Math.max(120, event.duration ?? 180),
         easing: Easing.in(Easing.cubic),
@@ -388,112 +422,120 @@ export default function App(): React.ReactElement {
   }
 
   return (
-    <SafeAreaView style={[styles.root, Platform.OS === "android" ? styles.androidSafeArea : null]}>
-      <StatusBar barStyle="light-content" backgroundColor={palette.bg} translucent={false} />
-      <View style={styles.app}>
-        <View style={[styles.workspace, wide ? styles.workspaceWide : null]}>
-          {wide ? (
-            <View style={styles.sidebar}>
-              <SessionTree
+    <SafeAreaProvider style={styles.root}>
+      <SafeAreaView style={styles.root}>
+        <StatusBar barStyle="light-content" backgroundColor={palette.bg} translucent={false} />
+        <View style={styles.app}>
+          <View style={[styles.workspace, wide ? styles.workspaceWide : null]}>
+            {wide ? (
+              <View style={styles.sidebar}>
+                <SessionTree
+                  selectedWindowId={selected?.window.id ?? null}
+                  tree={tree}
+                  onCreateSession={() => void createSession()}
+                  onCreateWindow={() => void createWindow()}
+                  onDeleteSession={(sessionId) => void deleteSession(sessionId)}
+                  onDeleteWindow={(windowId) => void deleteWindow(windowId)}
+                  onRename={setRenameTarget}
+                  onSelectWindow={selectWindow}
+                />
+              </View>
+            ) : null}
+
+            <View style={styles.primary}>
+              <WindowTabsBar
+                selectedWindowId={selected?.window.id ?? null}
+                session={selected?.session ?? null}
+                onCreateWindow={() => void createWindow()}
+                onSelectWindow={selectWindow}
+              />
+              <Animated.View
+                style={[
+                  styles.terminalFrame,
+                  {
+                    marginBottom: terminalBottomInset,
+                    transform: [{ translateY: terminalTranslateY }]
+                  }
+                ]}
+              >
+                {loading ? (
+                  <View style={styles.emptyState}>
+                    <ActivityIndicator color={palette.accent} />
+                  </View>
+                ) : terminalUrl && selectedPaneId ? (
+                  <TerminalPane
+                    ref={terminalRef}
+                    key={selectedPaneId}
+                    paneId={selectedPaneId}
+                    wsUrl={terminalUrl}
+                    onStatus={() => undefined}
+                    onTreeChanged={handleTreeChanged}
+                  />
+                ) : (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>No tmux panes</Text>
+                    <Text style={styles.muted}>Create a session to start a shell on this host.</Text>
+                    <Pressable onPress={() => void createSession()} style={styles.primaryButtonCompact}>
+                      <Text style={styles.primaryButtonText}>Create session</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </Animated.View>
+
+              {error ? <Text style={styles.errorTextInline}>{error}</Text> : null}
+            </View>
+          </View>
+
+          <CommandBar
+            bottomInset={commandBarBottomInset}
+            keyboardOffset={keyboardOffset}
+            keyboardVisible={keyboardVisible}
+            onArrowDown={() => sendTerminalKey("\u001b[B")}
+            onArrowUp={() => sendTerminalKey("\u001b[A")}
+            onControl={() => sendTerminalKey("\u0003")}
+            onTab={() => sendTerminalKey("\t")}
+            onFocusTerminal={focusTerminalInput}
+            onInput={sendTerminalInput}
+            onMenu={() => setShowSwitcher((value) => !value)}
+          />
+
+          <AppBottomSheet
+            isPresented={showSwitcher}
+            onDismiss={handleSwitcherDismiss}
+            showDragIndicator
+            snapPoints={[{ fraction: 0.58 }, "full"]}
+          >
+            <View style={[styles.sheetContent, { width: sheetWidth }]}>
+              <View style={styles.sheetHeader}>
+                <Text style={styles.sheetTitle}>Sessions</Text>
+                <View style={styles.sheetHeaderActions}>
+                  <IconButton icon={Home} iosSymbol="house" label="Home" onPress={returnHome} />
+                  <IconButton icon={Plus} iosSymbol="plus" label="New session" onPress={() => void createSession()} />
+                </View>
+              </View>
+              <SessionSheet
                 selectedWindowId={selected?.window.id ?? null}
                 tree={tree}
                 onCreateSession={() => void createSession()}
-                onCreateWindow={() => void createWindow()}
+                onCreateWindow={(sessionId) => void createWindowForSession(sessionId)}
                 onDeleteSession={(sessionId) => void deleteSession(sessionId)}
                 onDeleteWindow={(windowId) => void deleteWindow(windowId)}
-                onRename={setRenameTarget}
+                onRename={openRenameFromSwitcher}
                 onSelectWindow={selectWindow}
               />
             </View>
-          ) : null}
+          </AppBottomSheet>
 
-          <View style={styles.primary}>
-            <Animated.View
-              style={[
-                styles.terminalFrame,
-                {
-                  marginBottom: terminalBottomInset,
-                  transform: [{ translateY: terminalTranslateY }]
-                }
-              ]}
-            >
-              {loading ? (
-                <View style={styles.emptyState}>
-                  <ActivityIndicator color={palette.accent} />
-                </View>
-              ) : terminalUrl && selectedPaneId ? (
-                <TerminalPane
-                  ref={terminalRef}
-                  key={selectedPaneId}
-                  paneId={selectedPaneId}
-                  wsUrl={terminalUrl}
-                  onStatus={() => undefined}
-                  onTreeChanged={handleTreeChanged}
-                />
-              ) : (
-                <View style={styles.emptyState}>
-                  <Text style={styles.emptyTitle}>No tmux panes</Text>
-                  <Text style={styles.muted}>Create a session to start a shell on this host.</Text>
-                  <Pressable onPress={() => void createSession()} style={styles.primaryButtonCompact}>
-                    <Text style={styles.primaryButtonText}>Create session</Text>
-                  </Pressable>
-                </View>
-              )}
-            </Animated.View>
-
-            {error ? <Text style={styles.errorTextInline}>{error}</Text> : null}
-          </View>
-        </View>
-
-        <CommandBar
-          bottomInset={commandBarBottomInset}
-          keyboardOffset={keyboardOffset}
-          keyboardVisible={keyboardVisible}
-          onArrowDown={() => sendTerminalKey("\u001b[B")}
-          onArrowUp={() => sendTerminalKey("\u001b[A")}
-          onControl={() => sendTerminalKey("\u0003")}
-          onTab={() => sendTerminalKey("\t")}
-          onFocusTerminal={focusTerminalInput}
-          onInput={sendTerminalInput}
-          onMenu={() => setShowSwitcher((value) => !value)}
-        />
-
-        <AppBottomSheet
-          isPresented={showSwitcher}
-          onDismiss={handleSwitcherDismiss}
-          showDragIndicator
-          snapPoints={[{ fraction: 0.58 }, "full"]}
-        >
-          <View style={[styles.sheetContent, { width: sheetWidth }]}>
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>Sessions</Text>
-              <View style={styles.sheetHeaderActions}>
-                <IconButton icon={Home} iosSymbol="house" label="Home" onPress={returnHome} />
-                <IconButton icon={Plus} iosSymbol="plus" label="New session" onPress={() => void createSession()} />
-              </View>
-            </View>
-            <SessionSheet
-              selectedWindowId={selected?.window.id ?? null}
-              tree={tree}
-              onCreateSession={() => void createSession()}
-              onCreateWindow={(sessionId) => void createWindowForSession(sessionId)}
-              onDeleteSession={(sessionId) => void deleteSession(sessionId)}
-              onDeleteWindow={(windowId) => void deleteWindow(windowId)}
-              onRename={openRenameFromSwitcher}
-              onSelectWindow={selectWindow}
+          {renameTarget ? (
+            <RenameSheet
+              target={renameTarget}
+              onCancel={() => setRenameTarget(null)}
+              onSubmit={(nextName) => void submitRename(nextName)}
             />
-          </View>
-        </AppBottomSheet>
-
-        {renameTarget ? (
-          <RenameSheet
-            target={renameTarget}
-            onCancel={() => setRenameTarget(null)}
-            onSubmit={(nextName) => void submitRename(nextName)}
-          />
-        ) : null}
-      </View>
-    </SafeAreaView>
+          ) : null}
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
@@ -653,81 +695,83 @@ function WelcomeScreen({
   const [showAddServerSheet, setShowAddServerSheet] = useState(false);
 
   return (
-    <SafeAreaView style={[styles.root, Platform.OS === "android" ? styles.androidSafeArea : null]}>
-      <StatusBar barStyle="light-content" backgroundColor={palette.bg} translucent={false} />
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        style={styles.setupScroll}
-        contentContainerStyle={styles.setupScrollContent}
-      >
-        <View style={styles.setup}>
-          <View style={styles.setupHeader}>
-            <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={palette.accent} size={28} />
-            <Text style={styles.brand}>Telemux</Text>
-            <Text style={styles.muted}>Connect to a tmux host reachable through your tunnel or VPN.</Text>
-          </View>
+    <SafeAreaProvider style={styles.root}>
+      <SafeAreaView style={styles.root}>
+        <StatusBar barStyle="light-content" backgroundColor={palette.bg} translucent={false} />
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          style={styles.setupScroll}
+          contentContainerStyle={styles.setupScrollContent}
+        >
+          <View style={styles.setup}>
+            <View style={styles.setupHeader}>
+              <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={palette.accent} size={28} />
+              <Text style={styles.brand}>Telemux</Text>
+              <Text style={styles.muted}>Connect to a tmux host reachable through your tunnel or VPN.</Text>
+            </View>
 
-          <View style={styles.savedServers}>
-            <View style={styles.setupSectionHeader}>
-              <Text style={styles.setupSectionTitle}>Servers</Text>
-              <View style={styles.setupSectionActions}>
-                {loading && !connectingConnectionId ? <ActivityIndicator color={palette.accent} /> : null}
-                {hasSavedServers ? (
+            <View style={styles.savedServers}>
+              <View style={styles.setupSectionHeader}>
+                <Text style={styles.setupSectionTitle}>Servers</Text>
+                <View style={styles.setupSectionActions}>
+                  {loading && !connectingConnectionId ? <ActivityIndicator color={palette.accent} /> : null}
+                  {hasSavedServers ? (
+                    <Pressable disabled={busy} onPress={() => setShowAddServerSheet(true)} style={styles.textButton}>
+                      <Text style={[styles.textButtonText, busy ? styles.textButtonTextDisabled : null]}>Add server</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              </View>
+              {hasSavedServers ? (
+                <View style={styles.savedServerList}>
+                  {connections.map((savedConnection) => (
+                    <SavedServerRow
+                      key={savedConnection.id}
+                      connection={savedConnection}
+                      connecting={connectingConnectionId === savedConnection.id}
+                      disabled={busy}
+                      onConnect={() => onConnectSaved(savedConnection)}
+                      onDelete={() => onDeleteSaved(savedConnection.id)}
+                    />
+                  ))}
+                </View>
+              ) : (
+                <View style={styles.emptyServerState}>
+                  <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={palette.faint} size={22} />
+                  <Text style={styles.emptyServerText}>No saved servers yet.</Text>
                   <Pressable disabled={busy} onPress={() => setShowAddServerSheet(true)} style={styles.textButton}>
                     <Text style={[styles.textButtonText, busy ? styles.textButtonTextDisabled : null]}>Add server</Text>
                   </Pressable>
-                ) : null}
-              </View>
+                </View>
+              )}
             </View>
-            {hasSavedServers ? (
-              <View style={styles.savedServerList}>
-                {connections.map((savedConnection) => (
-                  <SavedServerRow
-                    key={savedConnection.id}
-                    connection={savedConnection}
-                    connecting={connectingConnectionId === savedConnection.id}
-                    disabled={busy}
-                    onConnect={() => onConnectSaved(savedConnection)}
-                    onDelete={() => onDeleteSaved(savedConnection.id)}
-                  />
-                ))}
-              </View>
-            ) : (
-              <View style={styles.emptyServerState}>
-                <AdaptiveIcon fallback={Server} iosSymbol="server.rack" color={palette.faint} size={22} />
-                <Text style={styles.emptyServerText}>No saved servers yet.</Text>
-                <Pressable disabled={busy} onPress={() => setShowAddServerSheet(true)} style={styles.textButton}>
-                  <Text style={[styles.textButtonText, busy ? styles.textButtonTextDisabled : null]}>Add server</Text>
-                </Pressable>
-              </View>
-            )}
-          </View>
 
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
-        </View>
-      </ScrollView>
-      <AppBottomSheet
-        isPresented={showAddServerSheet}
-        onDismiss={() => setShowAddServerSheet(false)}
-        showDragIndicator
-        snapPoints={[{ fraction: 0.58 }, "full"]}
-      >
-        <View style={[styles.addServerSheetContent, { width: sheetWidth }]}>
-          <AddServerForm
-            busy={busy}
-            formConnecting={formConnecting}
-            setupHost={setupHost}
-            setupLabel={setupLabel}
-            setupPort={setupPort}
-            onCancel={() => setShowAddServerSheet(false)}
-            onConnect={onConnect}
-            onSetupHostChange={onSetupHostChange}
-            onSetupLabelChange={onSetupLabelChange}
-            onSetupPortChange={onSetupPortChange}
-          />
-        </View>
-      </AppBottomSheet>
-    </SafeAreaView>
+            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          </View>
+        </ScrollView>
+        <AppBottomSheet
+          isPresented={showAddServerSheet}
+          onDismiss={() => setShowAddServerSheet(false)}
+          showDragIndicator
+          snapPoints={[{ fraction: 0.58 }, "full"]}
+        >
+          <View style={[styles.addServerSheetContent, { width: sheetWidth }]}>
+            <AddServerForm
+              busy={busy}
+              formConnecting={formConnecting}
+              setupHost={setupHost}
+              setupLabel={setupLabel}
+              setupPort={setupPort}
+              onCancel={() => setShowAddServerSheet(false)}
+              onConnect={onConnect}
+              onSetupHostChange={onSetupHostChange}
+              onSetupLabelChange={onSetupLabelChange}
+              onSetupPortChange={onSetupPortChange}
+            />
+          </View>
+        </AppBottomSheet>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
@@ -1065,6 +1109,56 @@ function WindowNode({
   );
 }
 
+function WindowTabsBar({
+  session,
+  selectedWindowId,
+  onCreateWindow,
+  onSelectWindow
+}: {
+  session: TmuxSession | null;
+  selectedWindowId: string | null;
+  onCreateWindow(): void;
+  onSelectWindow(window: TmuxWindow): void;
+}): React.ReactElement | null {
+  if (!session) {
+    return null;
+  }
+
+  return (
+    <View style={styles.windowTabsBar}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.windowTabsScroll}
+        contentContainerStyle={styles.windowTabsContent}
+      >
+        {session.windows.map((window) => {
+          const selected = window.id === selectedWindowId;
+          return (
+            <Pressable
+              key={window.id}
+              accessibilityLabel={`Switch to window ${window.index}: ${window.name}`}
+              onPress={() => onSelectWindow(window)}
+              style={[styles.windowTab, selected ? styles.windowTabSelected : null]}
+            >
+              <Text numberOfLines={1} style={[styles.windowTabText, selected ? styles.windowTabTextSelected : null]}>
+                {window.index}: {window.name}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+      <TouchableOpacity
+        accessibilityLabel={`New window in ${session.name}`}
+        onPress={onCreateWindow}
+        style={styles.windowTabsAddButton}
+      >
+        <AdaptiveIcon fallback={Plus} iosSymbol="plus" color={palette.text} size={17} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function CommandBar({
   bottomInset,
   keyboardOffset,
@@ -1088,7 +1182,7 @@ function CommandBar({
   onInput(data: string): void;
   onMenu(): void;
 }): React.ReactElement {
-  const keyboardTranslateY = Animated.multiply(keyboardOffset, -1);
+  const keyboardTranslateY = keyboardLiftTranslateY(keyboardOffset);
 
   return (
     <Animated.View
@@ -1101,20 +1195,36 @@ function CommandBar({
       ]}
     >
       <CommandIconButton icon={Menu} iosSymbol="line.3.horizontal" label="Sessions" onPress={onMenu} />
-      <View style={styles.commandDivider} />
-      <CommandTextButton label="Send Ctrl-C" text="Ctrl" onPress={onControl} />
-      <CommandTextButton label="Send Tab" text="Tab" onPress={onTab} />
-      <CommandIconButton icon={ArrowUp} iosSymbol="arrow.up" label="Arrow up" onPress={onArrowUp} />
-      <CommandIconButton icon={ArrowDown} iosSymbol="arrow.down" label="Arrow down" onPress={onArrowDown} />
+      <View style={styles.commandControls}>
+        <CommandTextButton label="Send Ctrl-C" text="Ctrl" onPress={onControl} />
+        <CommandTextButton label="Send Tab" text="Tab" onPress={onTab} />
+        <CommandIconButton icon={ArrowUp} iosSymbol="arrow.up" label="Arrow up" onPress={onArrowUp} />
+        <CommandIconButton icon={ArrowDown} iosSymbol="arrow.down" label="Arrow down" onPress={onArrowDown} />
+      </View>
       <CommandKeyboardButton
         active={keyboardVisible}
         label="Keyboard input"
         onFocusTerminal={onFocusTerminal}
         onInput={onInput}
       />
-      <View style={styles.commandSpacer} />
     </Animated.View>
   );
+}
+
+function keyboardLiftTranslateY(keyboardOffset: CommandProgress): 0 | ReturnType<typeof Animated.multiply> {
+  return Platform.OS === "android" ? 0 : Animated.multiply(keyboardOffset, -1);
+}
+
+function updateKeyboardInset(
+  keyboardHeight: number,
+  closedWindowHeight: number,
+  currentWindowHeight: number,
+  setKeyboardInset: React.Dispatch<React.SetStateAction<number>>
+): void {
+  const resizedByNative = Math.max(0, closedWindowHeight - currentWindowHeight);
+  const nextInset = Math.max(0, Math.ceil(keyboardHeight - resizedByNative));
+  const normalizedInset = nextInset < 24 ? 0 : nextInset;
+  setKeyboardInset((current) => current === normalizedInset ? current : normalizedInset);
 }
 
 function CommandKeyboardButton({
@@ -1491,9 +1601,6 @@ const styles = StyleSheet.create({
     backgroundColor: palette.bg,
     flex: 1
   },
-  androidSafeArea: {
-    paddingTop: statusBarHeight
-  },
   app: {
     backgroundColor: palette.bg,
     flex: 1,
@@ -1720,6 +1827,59 @@ const styles = StyleSheet.create({
     backgroundColor: "#0d1110",
     flex: 1,
     minHeight: 0
+  },
+  windowTabsBar: {
+    alignItems: "center",
+    backgroundColor: "#111613",
+    borderBottomColor: "rgba(216, 229, 222, 0.08)",
+    borderBottomWidth: 1,
+    flexDirection: "row",
+    height: 42,
+    minHeight: 42
+  },
+  windowTabsScroll: {
+    flex: 1,
+    minWidth: 0
+  },
+  windowTabsContent: {
+    alignItems: "center",
+    gap: 6,
+    minHeight: 42,
+    paddingHorizontal: 8
+  },
+  windowTab: {
+    alignItems: "center",
+    borderColor: "transparent",
+    borderRadius: 7,
+    borderWidth: 1,
+    height: 30,
+    justifyContent: "center",
+    maxWidth: 156,
+    minWidth: 74,
+    paddingHorizontal: 10
+  },
+  windowTabSelected: {
+    backgroundColor: "rgba(124, 227, 139, 0.12)",
+    borderColor: "rgba(124, 227, 139, 0.32)"
+  },
+  windowTabText: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0
+  },
+  windowTabTextSelected: {
+    color: palette.text,
+    fontWeight: "800"
+  },
+  windowTabsAddButton: {
+    alignItems: "center",
+    borderLeftColor: "rgba(216, 229, 222, 0.08)",
+    borderLeftWidth: 1,
+    flexShrink: 0,
+    height: 42,
+    justifyContent: "center",
+    width: 44
   },
   emptyState: {
     alignItems: "center",
@@ -2025,7 +2185,7 @@ const styles = StyleSheet.create({
     borderTopColor: "rgba(216, 229, 222, 0.08)",
     borderTopWidth: 1,
     flexDirection: "row",
-    gap: 7,
+    gap: 8,
     height: COMMAND_BAR_HEIGHT,
     left: 0,
     paddingHorizontal: 10,
@@ -2033,8 +2193,18 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 35
   },
+  commandControls: {
+    alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    gap: 7,
+    justifyContent: "flex-start",
+    minWidth: 0,
+    overflow: "hidden"
+  },
   commandButton: {
     alignItems: "center",
+    flexShrink: 0,
     height: 36,
     justifyContent: "center",
     minWidth: 38,
@@ -2042,6 +2212,7 @@ const styles = StyleSheet.create({
   },
   commandKeyboardButton: {
     alignItems: "center",
+    flexShrink: 0,
     height: 36,
     justifyContent: "center",
     minWidth: 38,
@@ -2070,12 +2241,4 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0
   },
-  commandDivider: {
-    backgroundColor: "rgba(216, 229, 222, 0.1)",
-    height: 24,
-    width: 1
-  },
-  commandSpacer: {
-    flex: 1
-  }
 });

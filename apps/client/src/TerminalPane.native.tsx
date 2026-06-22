@@ -6,6 +6,7 @@ import {
   TERMINAL_FONT_FACE,
   TERMINAL_FONT_FAMILY,
   TERMINAL_FONT_SIZE,
+  TERMINAL_HORIZONTAL_PADDING,
   TERMINAL_LINE_HEIGHT,
   TERMINAL_TOP_PADDING,
   resolveTerminalFontUris,
@@ -24,8 +25,13 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
 
   const handleLayout = useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
     const { width, height } = event.nativeEvent.layout;
-    lastLayoutRef.current = { width, height };
-    syncViewportSize(width, height);
+    const nextLayout = { width: Math.floor(width), height: Math.floor(height) };
+    const lastLayout = lastLayoutRef.current;
+    if (lastLayout?.width === nextLayout.width && lastLayout.height === nextLayout.height) {
+      return;
+    }
+    lastLayoutRef.current = nextLayout;
+    syncViewportSize(nextLayout.width, nextLayout.height);
   }, []);
 
   const syncLastViewportSize = useCallback(() => {
@@ -122,6 +128,7 @@ function terminalHtml(wsUrl: string): string {
   const encodedTerminalFontFamily = JSON.stringify(TERMINAL_FONT_FAMILY);
   const encodedTerminalFontSize = JSON.stringify(TERMINAL_FONT_SIZE);
   const encodedTerminalLineHeight = JSON.stringify(TERMINAL_LINE_HEIGHT);
+  const encodedTerminalHorizontalPadding = JSON.stringify(TERMINAL_HORIZONTAL_PADDING);
   return `<!doctype html>
 <html>
 <head>
@@ -130,6 +137,8 @@ function terminalHtml(wsUrl: string): string {
     ${terminalFontCss}
 
     :root {
+      --telemux-terminal-horizontal-inset: ${TERMINAL_HORIZONTAL_PADDING * 2}px;
+      --telemux-terminal-horizontal-padding: ${TERMINAL_HORIZONTAL_PADDING}px;
       --telemux-terminal-top-padding: ${TERMINAL_TOP_PADDING}px;
     }
 
@@ -153,13 +162,13 @@ function terminalHtml(wsUrl: string): string {
       height: calc(var(--telemux-height, 100vh) - var(--telemux-terminal-top-padding));
       outline: none !important;
       position: fixed;
-      left: 0;
+      left: var(--telemux-terminal-horizontal-padding);
       top: var(--telemux-terminal-top-padding);
       touch-action: none;
       user-select: none;
       -webkit-tap-highlight-color: transparent;
       -webkit-user-select: none;
-      width: var(--telemux-width, 100vw);
+      width: calc(var(--telemux-width, 100vw) - var(--telemux-terminal-horizontal-inset));
     }
 
     #terminal *,
@@ -192,7 +201,7 @@ function terminalHtml(wsUrl: string): string {
     let socket;
     let nativeViewportWidth;
     let nativeViewportHeight;
-    let pendingViewportFit;
+    let pendingViewportFit = 0;
     let lastSentCols;
     let lastSentRows;
     let followBottomUntil = 0;
@@ -200,25 +209,33 @@ function terminalHtml(wsUrl: string): string {
     const terminalFontFamily = ${encodedTerminalFontFamily};
     const terminalFontSize = ${encodedTerminalFontSize};
     const terminalLineHeight = ${encodedTerminalLineHeight};
+    const terminalHorizontalPadding = ${encodedTerminalHorizontalPadding};
     const terminalTopPadding = ${TERMINAL_TOP_PADDING};
     const touchScrollLinePx = 22;
 
     window.telemuxFit = () => {
       try {
+        const shouldFollowBottom = shouldFollowTerminalBottom();
         applyViewportSize();
         if (!fitToNativeViewport()) {
           fit && fit.fit();
         }
         sendResizeIfChanged();
+        if (shouldFollowBottom) {
+          keepTerminalBottomVisible();
+        }
       } catch {}
     };
 
     window.telemuxSetViewportSize = (width, height) => {
       if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
-      nativeViewportWidth = Math.floor(width);
-      nativeViewportHeight = Math.floor(height);
-      document.documentElement.style.setProperty('--telemux-width', width + 'px');
-      document.documentElement.style.setProperty('--telemux-height', height + 'px');
+      const nextWidth = Math.floor(width);
+      const nextHeight = Math.floor(height);
+      if (nativeViewportWidth === nextWidth && nativeViewportHeight === nextHeight) return;
+      nativeViewportWidth = nextWidth;
+      nativeViewportHeight = nextHeight;
+      document.documentElement.style.setProperty('--telemux-width', nextWidth + 'px');
+      document.documentElement.style.setProperty('--telemux-height', nextHeight + 'px');
       scheduleFit();
     };
 
@@ -234,7 +251,7 @@ function terminalHtml(wsUrl: string): string {
     window.telemuxFocus = () => {
       try {
         hideNativeCaret();
-        scrollTerminalToBottom();
+        keepTerminalBottomVisible();
       } catch {}
     };
 
@@ -258,7 +275,6 @@ function terminalHtml(wsUrl: string): string {
       term.blur && term.blur();
       installNativeTouchScroll(terminalRoot);
       hideNativeCaret();
-      fit.observeResize();
       scheduleFit();
 
       term.onData((data) => {
@@ -270,7 +286,7 @@ function terminalHtml(wsUrl: string): string {
       });
 
       socket = new WebSocket(${encodedUrl});
-      socket.onopen = () => { post({ type: 'status', value: 'connected' }); window.telemuxFit(); window.telemuxFocus(); };
+      socket.onopen = () => { post({ type: 'status', value: 'connected' }); scheduleFit(); window.telemuxFocus(); };
       socket.onclose = () => post({ type: 'status', value: 'disconnected' });
       socket.onerror = () => post({ type: 'status', value: 'socket error' });
       socket.onmessage = (event) => {
@@ -282,24 +298,50 @@ function terminalHtml(wsUrl: string): string {
           scrollTerminalToBottom();
           scheduleFit();
         } else if (message.type === 'output') {
+          const shouldFollowBottom = shouldFollowTerminalBottom();
           term.write(message.data);
-          scrollAfterRecentInput();
-          requestAnimationFrame(scrollAfterRecentInput);
+          if (shouldFollowBottom) {
+            keepTerminalBottomVisible();
+          }
         } else if (message.type === 'treeChanged') {
           post({ type: 'treeChanged' });
         } else if (message.type === 'error') {
           post({ type: 'status', value: message.message });
         }
       };
-      window.addEventListener('resize', window.telemuxFit);
+      window.addEventListener('resize', () => {
+        if (!nativeViewportWidth || !nativeViewportHeight) {
+          scheduleFit();
+        }
+      });
       setTimeout(hideNativeCaret, 0);
-      scheduleFit();
     }
 
     function sendTerminalInput(data) {
       followBottomUntil = Date.now() + 1000;
-      scrollTerminalToBottom();
+      keepTerminalBottomVisible();
       socket && socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'input', data }));
+    }
+
+    function shouldFollowTerminalBottom() {
+      return Date.now() < followBottomUntil || isTerminalAtBottom();
+    }
+
+    function isTerminalAtBottom() {
+      try {
+        if (!term) return true;
+        const activeBuffer = term.buffer && term.buffer.active;
+        const viewportY = Number(activeBuffer && activeBuffer.viewportY);
+        const baseY = Number(activeBuffer && activeBuffer.baseY);
+        if (Number.isFinite(viewportY) && Number.isFinite(baseY)) {
+          return baseY - viewportY <= 1;
+        }
+      } catch {}
+      return true;
+    }
+
+    function keepTerminalBottomVisible() {
+      scrollTerminalToBottom();
       requestAnimationFrame(scrollTerminalToBottom);
       setTimeout(scrollTerminalToBottom, 50);
       setTimeout(scrollTerminalToBottom, 150);
@@ -315,12 +357,6 @@ function terminalHtml(wsUrl: string): string {
           term.scrollLines(activeBufferLength || 9999);
         }
       } catch {}
-    }
-
-    function scrollAfterRecentInput() {
-      if (Date.now() < followBottomUntil) {
-        scrollTerminalToBottom();
-      }
     }
 
     function applyViewportSize() {
@@ -341,7 +377,7 @@ function terminalHtml(wsUrl: string): string {
       const height = (nativeViewportHeight || document.documentElement.clientHeight || window.innerHeight) - terminalTopPadding;
       if (!width || !height) return false;
 
-      const cols = Math.max(20, Math.floor((width - 15) / metrics.width));
+      const cols = Math.max(20, Math.floor((width - terminalHorizontalPadding * 2) / metrics.width));
       const rows = Math.max(5, Math.floor(height / metrics.height));
       if (cols !== term.cols || rows !== term.rows) {
         term.resize(cols, rows);
@@ -358,15 +394,13 @@ function terminalHtml(wsUrl: string): string {
     }
 
     function scheduleFit() {
-      if (pendingViewportFit) clearTimeout(pendingViewportFit);
-      pendingViewportFit = setTimeout(() => {
-        pendingViewportFit = undefined;
+      if (pendingViewportFit) {
+        cancelAnimationFrame(pendingViewportFit);
+      }
+      pendingViewportFit = requestAnimationFrame(() => {
+        pendingViewportFit = 0;
         window.telemuxFit();
-        pendingViewportFit = setTimeout(() => {
-          pendingViewportFit = undefined;
-          window.telemuxFit();
-        }, 120);
-      }, 0);
+      });
     }
 
     async function loadTerminalFont() {
