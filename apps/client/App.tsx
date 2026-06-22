@@ -1158,7 +1158,7 @@ function WindowTabsBar({
               style={[styles.windowTab, selected ? styles.windowTabSelected : null]}
             >
               <Text numberOfLines={1} style={[styles.windowTabText, selected ? styles.windowTabTextSelected : null]}>
-                {window.index}: {window.name}
+                {window.name}
               </Text>
             </Pressable>
           );

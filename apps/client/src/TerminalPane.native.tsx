@@ -229,7 +229,7 @@ function terminalHtml(wsUrl: string): string {
     const terminalHorizontalPadding = ${encodedTerminalHorizontalPadding};
     const terminalScrollbarWidth = ${TERMINAL_SCROLLBAR_WIDTH};
     const terminalTopPadding = ${TERMINAL_TOP_PADDING};
-    const touchScrollLinePx = 22;
+    const touchScrollLinePx = 14;
 
     window.telemuxFit = () => {
       try {
@@ -451,8 +451,15 @@ function terminalHtml(wsUrl: string): string {
     function installNativeTouchScroll(root) {
       if (!root) return;
       let lastY = 0;
-      let remainderPx = 0;
+      let lastTouchTime = 0;
       let activeTouchId = null;
+      let velocityPxPerMs = 0;
+      let inertiaFrame = 0;
+      let inertiaVelocityPxPerMs = 0;
+      let lastInertiaTime = 0;
+      const maxInertiaVelocityPxPerMs = 2.6;
+      const minInertiaVelocityPxPerMs = 0.015;
+      const inertiaDecayMs = 520;
 
       const stopEvent = (event) => {
         event.preventDefault();
@@ -471,20 +478,63 @@ function terminalHtml(wsUrl: string): string {
       };
 
       const scrollByPixels = (deltaY) => {
-        if (!term || typeof term.scrollLines !== 'function' || !Number.isFinite(deltaY)) return;
-        remainderPx += deltaY;
-        const lineDelta = Math.trunc(remainderPx / touchScrollLinePx);
-        if (lineDelta === 0) return;
-        remainderPx -= lineDelta * touchScrollLinePx;
+        if (!term || typeof term.scrollLines !== 'function' || !Number.isFinite(deltaY)) return false;
+        const lineDelta = deltaY / touchScrollLinePx;
+        if (lineDelta === 0) return true;
+        const before = typeof term.getViewportY === 'function' ? term.getViewportY() : null;
         term.scrollLines(-lineDelta);
+        const after = typeof term.getViewportY === 'function' ? term.getViewportY() : null;
+        return before === null || after === null || Math.abs(before - after) > 0.001;
+      };
+
+      const cancelInertia = () => {
+        if (inertiaFrame) {
+          cancelAnimationFrame(inertiaFrame);
+          inertiaFrame = 0;
+        }
+        inertiaVelocityPxPerMs = 0;
+      };
+
+      const startInertia = () => {
+        cancelInertia();
+        if (!Number.isFinite(velocityPxPerMs) || Math.abs(velocityPxPerMs) < 0.08) {
+          velocityPxPerMs = 0;
+          return;
+        }
+
+        inertiaVelocityPxPerMs = Math.max(
+          -maxInertiaVelocityPxPerMs,
+          Math.min(maxInertiaVelocityPxPerMs, velocityPxPerMs)
+        );
+        velocityPxPerMs = 0;
+        lastInertiaTime = performance.now();
+
+        const step = (now) => {
+          const elapsed = Math.min(34, Math.max(1, now - lastInertiaTime));
+          lastInertiaTime = now;
+          const moved = scrollByPixels(inertiaVelocityPxPerMs * elapsed);
+          inertiaVelocityPxPerMs *= Math.exp(-elapsed / inertiaDecayMs);
+
+          if (moved && Math.abs(inertiaVelocityPxPerMs) >= minInertiaVelocityPxPerMs) {
+            inertiaFrame = requestAnimationFrame(step);
+            return;
+          }
+
+          inertiaFrame = 0;
+          inertiaVelocityPxPerMs = 0;
+        };
+
+        inertiaFrame = requestAnimationFrame(step);
       };
 
       root.addEventListener('touchstart', (event) => {
         const touch = event.changedTouches && event.changedTouches[0];
         if (!touch) return;
+        cancelInertia();
         activeTouchId = touch.identifier;
         lastY = touch.clientY;
-        remainderPx = 0;
+        lastTouchTime = performance.now();
+        velocityPxPerMs = 0;
         blurWebInput();
         stopEvent(event);
       }, { passive: false, capture: true });
@@ -493,8 +543,15 @@ function terminalHtml(wsUrl: string): string {
         const touches = Array.from(event.changedTouches || []);
         const touch = touches.find((item) => item.identifier === activeTouchId) || touches[0];
         if (!touch) return;
+        const now = performance.now();
         const deltaY = touch.clientY - lastY;
+        const elapsed = Math.max(1, now - lastTouchTime);
+        const instantVelocity = deltaY / elapsed;
+        velocityPxPerMs = velocityPxPerMs === 0
+          ? instantVelocity
+          : velocityPxPerMs * 0.65 + instantVelocity * 0.35;
         lastY = touch.clientY;
+        lastTouchTime = now;
         scrollByPixels(deltaY);
         blurWebInput();
         stopEvent(event);
@@ -502,27 +559,32 @@ function terminalHtml(wsUrl: string): string {
 
       root.addEventListener('touchend', (event) => {
         activeTouchId = null;
+        startInertia();
         blurWebInput();
         stopEvent(event);
       }, { passive: false, capture: true });
 
       root.addEventListener('touchcancel', (event) => {
         activeTouchId = null;
+        cancelInertia();
         blurWebInput();
         stopEvent(event);
       }, { passive: false, capture: true });
 
       root.addEventListener('pointerdown', (event) => {
+        cancelInertia();
         blurWebInput();
         stopEvent(event);
       }, { passive: false, capture: true });
 
       root.addEventListener('mousedown', (event) => {
+        cancelInertia();
         blurWebInput();
         stopEvent(event);
       }, { passive: false, capture: true });
 
       root.addEventListener('wheel', (event) => {
+        cancelInertia();
         scrollByPixels(event.deltaY);
         stopEvent(event);
       }, { passive: false, capture: true });
