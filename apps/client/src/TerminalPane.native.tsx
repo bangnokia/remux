@@ -325,6 +325,7 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
     let pendingViewportFit = 0;
     let pendingBottomScrollFrame = 0;
     let pendingBottomScrollTimers = [];
+    let viewportRestoreToken = 0;
     let pendingScrollbarFrame = 0;
     let scrollbarHideTimer = 0;
     let lastSentCols;
@@ -523,9 +524,10 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
       traceCanvasState('snapshot-before-write-canvas');
       pendingSnapshotMessage = null;
       const shouldFollowBottom = shouldFollowTerminalBottom();
+      const viewportBeforeWrite = shouldFollowBottom ? null : captureTerminalViewport();
       resizeTerminalToSnapshot(message);
       term.reset();
-      term.write(message.data);
+      writeTerminalData(message.data, viewportBeforeWrite);
       trace('snapshot-painted', snapshotDebugDetails(message));
       traceCanvasState('snapshot-after-write-canvas');
       scheduleCanvasProbe('snapshot-after-write');
@@ -559,10 +561,11 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
     }
 
     function writeOutputMessage(message, shouldFollowBottom = shouldFollowTerminalBottom()) {
-      term.write(message.data);
+      const viewportBeforeWrite = shouldFollowBottom ? null : captureTerminalViewport();
+      writeTerminalData(message.data, viewportBeforeWrite);
       if (shouldFollowBottom) {
         keepTerminalBottomVisible();
-      } else if (liveFollowPaused || !isTerminalAtBottom()) {
+      } else {
         liveFollowPaused = true;
         pendingOutputWhilePaused = true;
         updateLiveIndicator();
@@ -594,16 +597,7 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
     }
 
     function isTerminalAtBottom() {
-      try {
-        if (!term) return true;
-        const activeBuffer = term.buffer && term.buffer.active;
-        const viewportY = Number(activeBuffer && activeBuffer.viewportY);
-        const baseY = Number(activeBuffer && activeBuffer.baseY);
-        if (Number.isFinite(viewportY) && Number.isFinite(baseY)) {
-          return baseY - viewportY <= 1;
-        }
-      } catch {}
-      return true;
+      return getTerminalViewportY() <= 1;
     }
 
     function keepTerminalBottomVisible() {
@@ -629,6 +623,23 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
       });
     }
 
+    function cancelPendingBottomScroll() {
+      if (pendingBottomScrollFrame) {
+        cancelAnimationFrame(pendingBottomScrollFrame);
+        pendingBottomScrollFrame = 0;
+      }
+      if (pendingBottomScrollTimers.length > 0) {
+        for (const timeoutId of pendingBottomScrollTimers) {
+          window.clearTimeout(timeoutId);
+        }
+        pendingBottomScrollTimers = [];
+      }
+    }
+
+    function invalidatePendingViewportRestore() {
+      viewportRestoreToken += 1;
+    }
+
     function scrollTerminalToBottom() {
       try {
         if (!term) return;
@@ -648,11 +659,13 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
         return;
       }
 
+      cancelPendingBottomScroll();
       liveFollowPaused = true;
       updateLiveIndicator();
     }
 
     function resumeLiveFollow(scrollToBottom) {
+      invalidatePendingViewportRestore();
       liveFollowPaused = false;
       pendingOutputWhilePaused = false;
       updateLiveIndicator();
@@ -1014,6 +1027,60 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
       return 0;
     }
 
+    function captureTerminalViewport() {
+      return {
+        scrollbackLength: getTerminalScrollbackLength(),
+        viewportY: getTerminalViewportY()
+      };
+    }
+
+    function writeTerminalData(data, viewportBeforeWrite) {
+      if (!term) return;
+
+      if (!viewportBeforeWrite) {
+        term.write(data);
+        return;
+      }
+
+      const restoreToken = ++viewportRestoreToken;
+      const restoreIfCurrent = () => {
+        if (restoreToken !== viewportRestoreToken) return;
+        restoreTerminalViewportAfterWrite(viewportBeforeWrite);
+      };
+
+      term.write(data, restoreIfCurrent);
+      restoreIfCurrent();
+    }
+
+    function restoreTerminalViewportAfterWrite(previousViewport) {
+      if (!term || !previousViewport) return;
+
+      const nextScrollbackLength = getTerminalScrollbackLength();
+      const scrollbackDelta = Math.max(0, nextScrollbackLength - previousViewport.scrollbackLength);
+      const nextViewportY = Math.max(
+        0,
+        Math.min(nextScrollbackLength, previousViewport.viewportY + scrollbackDelta)
+      );
+      scrollTerminalToLine(nextViewportY);
+      scheduleScrollbarUpdate(false);
+    }
+
+    function scrollTerminalToLine(viewportY) {
+      if (!term || !Number.isFinite(viewportY)) return;
+      const nextViewportY = Math.max(0, viewportY);
+
+      try {
+        if (typeof term.scrollToLine === 'function') {
+          term.scrollToLine(nextViewportY);
+          return;
+        }
+        if (typeof term.scrollLines === 'function') {
+          const currentViewportY = getTerminalViewportY();
+          term.scrollLines(currentViewportY - nextViewportY);
+        }
+      } catch {}
+    }
+
     function scheduleFit() {
       cancelPendingFit();
       pendingViewportFit = requestAnimationFrame(() => {
@@ -1090,6 +1157,8 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
         if (!term || typeof term.scrollLines !== 'function' || !Number.isFinite(deltaY)) return false;
         const lineDelta = deltaY / touchScrollLinePx;
         if (lineDelta === 0) return true;
+        cancelPendingBottomScroll();
+        invalidatePendingViewportRestore();
         const before = typeof term.getViewportY === 'function' ? term.getViewportY() : null;
         term.scrollLines(-lineDelta);
         const after = typeof term.getViewportY === 'function' ? term.getViewportY() : null;
@@ -1147,6 +1216,8 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
         const touch = event.changedTouches && event.changedTouches[0];
         if (!touch) return;
         cancelInertia();
+        cancelPendingBottomScroll();
+        invalidatePendingViewportRestore();
         touchScrollActive = true;
         activeTouchId = touch.identifier;
         lastY = touch.clientY;
