@@ -1,4 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from "react";
+import type { TerminalKey } from "@telemux/protocol";
 import { Keyboard as NativeKeyboard, Platform } from "react-native";
 import { WebView } from "react-native-webview";
 import { StyleSheet, View } from "./rn";
@@ -81,6 +82,10 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     []
   );
 
+  const sendTerminalKey = useCallback((key: TerminalKey) => {
+    webViewRef.current?.injectJavaScript(`window.telemuxSendKey && window.telemuxSendKey(${JSON.stringify(key)}); true;`);
+  }, []);
+
   useEffect(() => {
     if (active) {
       syncLastViewportSize();
@@ -97,17 +102,20 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     sendInput(data: string) {
       sendToTerminal(data);
     },
+    sendKey(key: TerminalKey) {
+      sendTerminalKey(key);
+    },
     focusKeyboard() {
       webViewRef.current?.injectJavaScript("window.telemuxFocus && window.telemuxFocus(); true;");
     },
     fit() {
       if (active) {
         webViewRef.current?.injectJavaScript(
-          "window.telemuxScheduleFit ? window.telemuxScheduleFit() : window.telemuxFit && window.telemuxFit(); true;"
+          "window.telemuxResume ? window.telemuxResume() : window.telemuxScheduleFit ? window.telemuxScheduleFit() : window.telemuxFit && window.telemuxFit(); true;"
         );
       }
     }
-  }), [active, sendToTerminal]);
+  }), [active, sendTerminalKey, sendToTerminal]);
 
   function handleMessage(event: unknown): void {
     const data = readWebViewMessageData(event);
@@ -349,6 +357,8 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
     ];
     let term;
     let socket;
+    let socketReconnectTimer = 0;
+    let socketReconnectAttempt = 0;
     let nativeViewportWidth;
     let nativeViewportHeight;
     let pendingViewportFit = 0;
@@ -429,6 +439,22 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
       sendTerminalInput(data);
     };
 
+    window.telemuxSendKey = (key) => {
+      sendTerminalKey(key);
+    };
+
+    window.telemuxResume = () => {
+      trace('resume');
+      if (!socket || socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) {
+        socket = null;
+        connectTerminalSocket();
+      } else if (socket.readyState === WebSocket.OPEN) {
+        sendResizeIfChanged();
+      }
+      scheduleFit();
+      flushPendingSnapshot();
+    };
+
     window.telemuxScroll = (lines) => {
       if (!term || typeof term.scrollLines !== 'function' || !Number.isFinite(lines)) return;
       term.scrollLines(lines);
@@ -495,11 +521,72 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
         term.onScroll(() => scheduleScrollbarUpdate(true));
       }
 
-      socket = new WebSocket(${encodedUrl});
-      socket.onopen = () => { trace('socket-open'); post({ type: 'status', value: 'connected' }); scheduleFit(); window.telemuxFocus(); };
-      socket.onclose = () => { trace('socket-close'); post({ type: 'status', value: 'disconnected' }); };
-      socket.onerror = () => { trace('socket-error'); post({ type: 'status', value: 'socket error' }); };
-      socket.onmessage = (event) => {
+      connectTerminalSocket();
+      window.addEventListener('resize', () => {
+        trace('window-resize', {
+          clientHeight: document.documentElement.clientHeight,
+          clientWidth: document.documentElement.clientWidth,
+          innerHeight: window.innerHeight,
+          innerWidth: window.innerWidth,
+          nativeViewportHeight,
+          nativeViewportWidth
+        });
+        if (!nativeViewportWidth || !nativeViewportHeight) {
+          scheduleFit();
+        }
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          window.telemuxResume();
+        }
+      });
+      window.addEventListener('focus', () => window.telemuxResume());
+      window.addEventListener('pageshow', () => window.telemuxResume());
+      setTimeout(hideNativeCaret, 0);
+    }
+
+    function connectTerminalSocket() {
+      if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) {
+        return;
+      }
+
+      clearSocketReconnectTimer();
+      let nextSocket;
+      try {
+        nextSocket = new WebSocket(${encodedUrl});
+      } catch (error) {
+        trace('socket-create-error', { message: error && error.message });
+        scheduleSocketReconnect();
+        return;
+      }
+
+      socket = nextSocket;
+      nextSocket.onopen = () => {
+        if (socket !== nextSocket) return;
+        socketReconnectAttempt = 0;
+        trace('socket-open');
+        post({ type: 'status', value: 'connected' });
+        scheduleFit();
+        sendResizeIfChanged();
+        window.telemuxFocus();
+      };
+      nextSocket.onclose = () => {
+        if (socket !== nextSocket) return;
+        trace('socket-close');
+        socket = null;
+        post({ type: 'status', value: 'disconnected' });
+        scheduleSocketReconnect();
+      };
+      nextSocket.onerror = () => {
+        if (socket !== nextSocket) return;
+        trace('socket-error');
+        post({ type: 'status', value: 'socket error' });
+        try {
+          nextSocket.close();
+        } catch {}
+      };
+      nextSocket.onmessage = (event) => {
+        if (socket !== nextSocket) return;
         const message = JSON.parse(event.data);
         if (message.type === 'snapshot') {
           handleSnapshot(message);
@@ -515,22 +602,33 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
           post({ type: 'treeChanged' });
         } else if (message.type === 'error') {
           post({ type: 'status', value: message.message });
+        } else if (message.type === 'pong') {
+          trace('socket-pong', { id: message.id });
         }
       };
-      window.addEventListener('resize', () => {
-        trace('window-resize', {
-          clientHeight: document.documentElement.clientHeight,
-          clientWidth: document.documentElement.clientWidth,
-          innerHeight: window.innerHeight,
-          innerWidth: window.innerWidth,
-          nativeViewportHeight,
-          nativeViewportWidth
-        });
-        if (!nativeViewportWidth || !nativeViewportHeight) {
-          scheduleFit();
-        }
-      });
-      setTimeout(hideNativeCaret, 0);
+    }
+
+    function scheduleSocketReconnect() {
+      if (socketReconnectTimer) {
+        return;
+      }
+
+      const delay = Math.min(4000, 500 * Math.pow(1.45, socketReconnectAttempt));
+      socketReconnectAttempt += 1;
+      trace('socket-reconnect-scheduled', { delay });
+      socketReconnectTimer = window.setTimeout(() => {
+        socketReconnectTimer = 0;
+        connectTerminalSocket();
+      }, delay);
+    }
+
+    function clearSocketReconnectTimer() {
+      if (!socketReconnectTimer) {
+        return;
+      }
+
+      window.clearTimeout(socketReconnectTimer);
+      socketReconnectTimer = 0;
     }
 
     function handleSnapshot(message) {
@@ -617,6 +715,13 @@ function terminalHtml(wsUrl: string, paneId: string, traceId: string): string {
       followBottomUntil = Date.now() + 1000;
       keepTerminalBottomVisible();
       socket && socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'input', data }));
+    }
+
+    function sendTerminalKey(key) {
+      resumeLiveFollow(true);
+      followBottomUntil = Date.now() + 1000;
+      keepTerminalBottomVisible();
+      socket && socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: 'key', key }));
     }
 
     function shouldFollowTerminalBottom() {

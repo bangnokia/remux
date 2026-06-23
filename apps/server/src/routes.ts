@@ -1,3 +1,7 @@
+import { randomBytes } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import * as path from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import websocket from "@fastify/websocket";
 import type { AuthState } from "./auth.js";
@@ -7,7 +11,7 @@ import type { MetadataStore } from "./metadata.js";
 import { TerminalBridge } from "./control-mode.js";
 import type { TmuxService } from "./tmux.js";
 import { TELEMUX_API_VERSION } from "@telemux/protocol";
-import type { TreeClientMessage, TreeServerMessage, TmuxTree } from "@telemux/protocol";
+import type { TreeClientMessage, TreeServerMessage, TmuxTree, UploadedFile, UploadFileRequest } from "@telemux/protocol";
 import type { RawData, WebSocket } from "ws";
 
 interface RouteContext {
@@ -17,6 +21,9 @@ interface RouteContext {
 }
 
 const TREE_REFRESH_MS = 3000;
+const UPLOAD_BODY_LIMIT_BYTES = 40 * 1024 * 1024;
+const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const UPLOADS_DIR = path.join(homedir(), ".telemux", "uploads");
 
 export async function registerRoutes(app: FastifyInstance, context: RouteContext): Promise<void> {
   await app.register(websocket);
@@ -152,6 +159,33 @@ export async function registerRoutes(app: FastifyInstance, context: RouteContext
           ? (body.labels as Record<string, string>)
           : undefined
     });
+  });
+
+  app.post("/api/uploads", { bodyLimit: UPLOAD_BODY_LIMIT_BYTES }, async (request): Promise<UploadedFile> => {
+    const body = readBody<Partial<UploadFileRequest>>(request);
+    const originalName = readUploadName(body.name);
+    const mimeType = typeof body.mimeType === "string" && body.mimeType.trim() ? body.mimeType.trim() : null;
+    const base64 = readUploadBase64(body.base64);
+    const data = Buffer.from(base64, "base64");
+
+    if (data.length === 0) {
+      throw badRequest("upload is empty", "empty_upload");
+    }
+    if (data.length > UPLOAD_MAX_BYTES) {
+      throw badRequest("upload must be 25 MB or smaller", "upload_too_large");
+    }
+
+    await mkdir(UPLOADS_DIR, { recursive: true });
+    const filename = uniqueUploadFilename(originalName);
+    const targetPath = path.join(UPLOADS_DIR, filename);
+    await writeFile(targetPath, data, { flag: "wx" });
+
+    return {
+      mimeType,
+      name: originalName,
+      path: targetPath,
+      size: data.length
+    };
   });
 
   app.get("/ws/terminal", { websocket: true }, async (socket, request) => {
@@ -323,6 +357,61 @@ function readOptionalName(value: unknown): string | undefined {
   }
 
   return value.trim() || undefined;
+}
+
+function readUploadName(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw badRequest("upload name is required", "missing_upload_name");
+  }
+
+  const name = path.basename(value.trim()).replace(/[\u0000-\u001f\u007f]/g, "");
+  if (!name || name === "." || name === "..") {
+    throw badRequest("upload name is invalid", "invalid_upload_name");
+  }
+  return name;
+}
+
+function readUploadBase64(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw badRequest("upload data is required", "missing_upload_data");
+  }
+
+  const normalized = value.trim();
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 !== 0) {
+    throw badRequest("upload data must be base64", "invalid_upload_data");
+  }
+  return normalized;
+}
+
+function uniqueUploadFilename(originalName: string): string {
+  const extension = safeUploadExtension(originalName);
+  const stem = sanitizeUploadStem(extension ? originalName.slice(0, -extension.length) : originalName);
+  return `${uploadTimestamp()}-${randomBytes(3).toString("hex")}-${stem}${extension}`;
+}
+
+function safeUploadExtension(name: string): string {
+  const extension = path.extname(name);
+  if (!extension || extension.length > 24 || !/^\.[A-Za-z0-9]+$/.test(extension)) {
+    return "";
+  }
+  return extension.toLowerCase();
+}
+
+function sanitizeUploadStem(value: string): string {
+  const sanitized = value
+    .normalize("NFKD")
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return sanitized || "upload";
+}
+
+function uploadTimestamp(): string {
+  return new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\..+$/, "")
+    .replace("T", "-");
 }
 
 function readTokenFromWebSocketRequest(request: FastifyRequest): string | null {

@@ -6,22 +6,28 @@ import {
   RNHostView as ExpoRNHostView
 } from "@expo/ui";
 import { presentationBackground } from "@expo/ui/swift-ui/modifiers";
-import type { TmuxPane, TmuxPaneStatusKind, TmuxSession, TmuxTree, TmuxWindow, TreeServerMessage } from "@telemux/protocol";
+import { File as ExpoFile } from "expo-file-system";
+import type { TmuxPane, TmuxPaneStatusKind, TmuxSession, TmuxTree, TmuxWindow, TreeServerMessage, UploadedFile } from "@telemux/protocol";
 import {
   ArrowDown,
   ArrowUp,
   ChevronRight,
   Edit3,
+  FileText,
   Home,
   Keyboard as KeyboardIcon,
   Menu,
+  MessageSquare,
+  Paperclip,
   Plus,
   Server,
+  Send,
   SquareTerminal,
   Trash2,
+  X,
 } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Animated, AppState, Easing, Keyboard as NativeKeyboard, TextInput as NativeTextInput } from "react-native";
+import { Animated, AppState, Easing, Image, Keyboard as NativeKeyboard, TextInput as NativeTextInput } from "react-native";
 import type { AppStateStatus, KeyboardEvent } from "react-native";
 import {
   ActivityIndicator,
@@ -48,6 +54,16 @@ type IconType = React.ComponentType<{ color?: string; size?: number; strokeWidth
 type ExpoIconName = React.ComponentProps<typeof ExpoIcon>["name"];
 type RenameTarget = { kind: "session" | "window"; id: string; name: string } | null;
 type TerminalPaneCacheEntry = { paneId: string; wsUrl: string };
+type PromptAttachment = {
+  error?: string;
+  id: string;
+  localName: string;
+  localUri: string;
+  mimeType: string | null;
+  remote?: UploadedFile;
+  size: number;
+  status: "uploading" | "ready" | "error";
+};
 type WindowDisplayStatusKind = TmuxPaneStatusKind | "done";
 type AppBottomSheetProps = {
   children: React.ReactElement;
@@ -71,6 +87,9 @@ const COMMAND_BAR_HEIGHT = 52;
 const ANDROID_COMMAND_BAR_BOTTOM_INSET = 4;
 const TREE_SOCKET_RECONNECT_MS = 2000;
 const TERMINAL_PANE_CACHE_LIMIT = 5;
+const PROMPT_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const PROMPT_INPUT_MIN_HEIGHT = 36;
+const PROMPT_INPUT_MAX_HEIGHT = 116;
 const COMMAND_KEYBOARD_PROXY_VALUE = " ";
 const COMMAND_KEYBOARD_PROXY_SELECTION = {
   end: COMMAND_KEYBOARD_PROXY_VALUE.length,
@@ -101,6 +120,7 @@ export default function App(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [connectingConnectionId, setConnectingConnectionId] = useState<string | null>(null);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  const [showPromptComposer, setShowPromptComposer] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [appActive, setAppActive] = useState(() => AppState.currentState === "active");
@@ -402,6 +422,15 @@ export default function App(): React.ReactElement {
   }, [client, selectedPaneId]);
 
   useEffect(() => {
+    if (!appActive) {
+      return;
+    }
+
+    activeTerminalPane()?.fit();
+    void refreshTree();
+  }, [appActive, refreshTree, selectedPaneId]);
+
+  useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
@@ -506,6 +535,7 @@ export default function App(): React.ReactElement {
     activeTerminalPane()?.dismissKeyboard();
     NativeKeyboard.dismiss();
     setShowSwitcher(false);
+    setShowPromptComposer(false);
     setRenameTarget(null);
     setConnection(null);
     setTree(null);
@@ -607,6 +637,21 @@ export default function App(): React.ReactElement {
     activeTerminalPane()?.focusKeyboard();
   }
 
+  function submitPromptComposer(prompt: string, attachments: PromptAttachment[], sendNow: boolean): void {
+    const input = formatPromptComposerInput(prompt, attachments);
+    if (!input) {
+      return;
+    }
+
+    const terminalPane = activeTerminalPane();
+    terminalPane?.sendInput(input);
+    if (sendNow) {
+      setTimeout(() => terminalPane?.sendKey("Enter"), 20);
+    }
+    NativeKeyboard.dismiss();
+    setShowPromptComposer(false);
+  }
+
   function activeTerminalPane(): TerminalPaneHandle | null {
     return selectedPaneId ? terminalPaneRefs.current.get(selectedPaneId) ?? null : null;
   }
@@ -694,7 +739,7 @@ export default function App(): React.ReactElement {
                   <View style={styles.emptyState}>
                     <ActivityIndicator color={palette.accent} />
                   </View>
-                ) : selectedPaneId && terminalPaneRenderEntries.length > 0 && appActive ? (
+                ) : selectedPaneId && terminalPaneRenderEntries.length > 0 ? (
                   <>
                     {terminalPaneRenderEntries.map((entry) => (
                       <TerminalPaneLayer
@@ -732,6 +777,15 @@ export default function App(): React.ReactElement {
             onFocusTerminal={focusTerminalInput}
             onInput={sendTerminalInput}
             onMenu={() => setShowSwitcher((value) => !value)}
+            onPrompt={() => setShowPromptComposer((value) => !value)}
+          />
+
+          <PromptComposerOverlay
+            bottomInset={commandBarBottomInset}
+            client={client}
+            keyboardOffset={keyboardOffset}
+            isPresented={showPromptComposer}
+            onSubmit={submitPromptComposer}
           />
 
           <AppBottomSheet
@@ -1503,7 +1557,8 @@ function CommandBar({
   onFocusTerminal,
   onTab,
   onInput,
-  onMenu
+  onMenu,
+  onPrompt
 }: {
   bottomInset: number;
   keyboardOffset: CommandProgress;
@@ -1515,6 +1570,7 @@ function CommandBar({
   onTab(): void;
   onInput(data: string): void;
   onMenu(): void;
+  onPrompt(): void;
 }): React.ReactElement {
   const keyboardTranslateY = keyboardLiftTranslateY(keyboardOffset);
 
@@ -1535,6 +1591,7 @@ function CommandBar({
         <CommandIconButton icon={ArrowUp} iosSymbol="arrow.up" label="Arrow up" onPress={onArrowUp} />
         <CommandIconButton icon={ArrowDown} iosSymbol="arrow.down" label="Arrow down" onPress={onArrowDown} />
       </View>
+      <CommandIconButton icon={MessageSquare} iosSymbol="text.bubble" label="Prompt composer" onPress={onPrompt} />
       <CommandKeyboardButton
         active={keyboardVisible}
         label="Keyboard input"
@@ -1545,6 +1602,288 @@ function CommandBar({
   );
 }
 
+function PromptComposerOverlay({
+  bottomInset,
+  client,
+  keyboardOffset,
+  isPresented,
+  onSubmit
+}: {
+  bottomInset: number;
+  client: TelemuxClient | null;
+  keyboardOffset: CommandProgress;
+  isPresented: boolean;
+  onSubmit(prompt: string, attachments: PromptAttachment[], sendNow: boolean): void;
+}): React.ReactElement | null {
+  const inputRef = useRef<NativeTextInput>(null);
+  const [prompt, setPrompt] = useState("");
+  const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [inputHeight, setInputHeight] = useState(PROMPT_INPUT_MIN_HEIGHT);
+  const uploading = attachments.some((attachment) => attachment.status === "uploading");
+  const readyAttachments = attachments.filter((attachment) => attachment.status === "ready" && attachment.remote);
+  const canSubmit = !uploading && (prompt.trim().length > 0 || readyAttachments.length > 0);
+  const keyboardTranslateY = keyboardLiftTranslateY(keyboardOffset);
+
+  const attachFiles = useCallback(async () => {
+    if (!client) {
+      return;
+    }
+
+    setError(null);
+    try {
+      const result = await ExpoFile.pickFileAsync({
+        mimeTypes: "*/*",
+        multipleFiles: true
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const selected = result.result;
+      const pendingAttachments = selected.map((file) => ({
+        id: nextPromptAttachmentId(),
+        localName: file.name,
+        localUri: file.uri,
+        mimeType: file.type || null,
+        size: file.size,
+        status: "uploading" as const
+      }));
+
+      setAttachments((current) => [...current, ...pendingAttachments]);
+
+      await Promise.all(selected.map(async (file, index) => {
+        const pending = pendingAttachments[index];
+        if (!file || !pending) {
+          return;
+        }
+
+        try {
+          const base64 = await readPromptUploadBase64(file);
+          const remote = await client.uploadFile({
+            base64,
+            mimeType: file.type || null,
+            name: file.name
+          });
+          setAttachments((current) =>
+            current.map((attachment) =>
+              attachment.id === pending.id
+                ? { ...attachment, remote, status: "ready" }
+                : attachment
+            )
+          );
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.message : "Upload failed";
+          setAttachments((current) =>
+            current.map((attachment) =>
+              attachment.id === pending.id
+                ? { ...attachment, error: message, status: "error" }
+                : attachment
+            )
+          );
+          setError(message);
+        }
+      }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to select files");
+    }
+  }, [client]);
+
+  const removeAttachment = useCallback((attachmentId: string) => {
+    setAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
+  }, []);
+
+  const submit = useCallback(() => {
+    if (!canSubmit) {
+      return;
+    }
+
+    inputRef.current?.blur();
+    NativeKeyboard.dismiss();
+    onSubmit(prompt, attachments, true);
+    setPrompt("");
+    setAttachments([]);
+    setError(null);
+    setInputHeight(PROMPT_INPUT_MIN_HEIGHT);
+  }, [attachments, canSubmit, onSubmit, prompt]);
+
+  const handleInputContentSizeChange = useCallback((event: { nativeEvent: { contentSize: { height: number } } }) => {
+    const nextHeight = Math.max(
+      PROMPT_INPUT_MIN_HEIGHT,
+      Math.min(PROMPT_INPUT_MAX_HEIGHT, Math.ceil(event.nativeEvent.contentSize.height))
+    );
+    setInputHeight(nextHeight);
+  }, []);
+
+  useEffect(() => {
+    if (!isPresented) {
+      return;
+    }
+
+    const focusTimer = setTimeout(() => {
+      inputRef.current?.focus();
+    }, 80);
+
+    return () => clearTimeout(focusTimer);
+  }, [isPresented]);
+
+  if (!isPresented) {
+    return null;
+  }
+
+  return (
+    <Animated.View
+      pointerEvents="box-none"
+      style={[
+        styles.promptComposerOverlay,
+        {
+          bottom: bottomInset + COMMAND_BAR_HEIGHT + 8,
+          transform: [{ translateY: keyboardTranslateY }]
+        }
+      ]}
+    >
+      <View
+        style={styles.promptComposerSheet}
+      >
+        {attachments.length > 0 ? (
+          <ScrollView
+            horizontal
+            keyboardShouldPersistTaps="handled"
+            showsHorizontalScrollIndicator={false}
+            style={styles.promptAttachmentPreviewScroll}
+            contentContainerStyle={styles.promptAttachmentPreviews}
+          >
+            {attachments.map((attachment) => (
+              <PromptAttachmentPreview
+                key={attachment.id}
+                attachment={attachment}
+                onRemove={removeAttachment}
+              />
+            ))}
+          </ScrollView>
+        ) : null}
+
+        {error ? <Text style={styles.promptComposerError}>{error}</Text> : null}
+
+        <View style={styles.promptComposerBar}>
+          <TouchableOpacity
+            accessibilityLabel="Attach files"
+            disabled={!client}
+            onPress={() => void attachFiles()}
+            style={[styles.promptComposerIconButton, !client ? styles.promptActionDisabled : null]}
+          >
+            <AdaptiveIcon fallback={Paperclip} iosSymbol="paperclip" color={palette.text} size={18} />
+          </TouchableOpacity>
+          <NativeTextInput
+            ref={inputRef}
+            autoCapitalize="sentences"
+            autoCorrect
+            keyboardAppearance="dark"
+            multiline
+            numberOfLines={1}
+            onContentSizeChange={handleInputContentSizeChange}
+            onChangeText={setPrompt}
+            placeholder="Message agent..."
+            placeholderTextColor={palette.faint}
+            scrollEnabled={inputHeight >= PROMPT_INPUT_MAX_HEIGHT}
+            style={[styles.promptComposerInput, { height: inputHeight }]}
+            textAlignVertical="top"
+            value={prompt}
+          />
+          <TouchableOpacity
+            accessibilityLabel="Send prompt"
+            disabled={!canSubmit}
+            onPress={submit}
+            style={[styles.promptSendIconButton, !canSubmit ? styles.promptSendIconButtonDisabled : null]}
+          >
+            <AdaptiveIcon fallback={Send} iosSymbol="arrow.up" color={canSubmit ? palette.bg : palette.faint} size={17} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+function PromptAttachmentPreview({
+  attachment,
+  onRemove
+}: {
+  attachment: PromptAttachment;
+  onRemove(attachmentId: string): void;
+}): React.ReactElement {
+  const image = isImageAttachment(attachment);
+  const errored = attachment.status === "error";
+  const uploading = attachment.status === "uploading";
+
+  if (image) {
+    return (
+      <View style={[
+        styles.promptImageAttachment,
+        errored ? styles.promptAttachmentError : null
+      ]}>
+        <Image
+          source={{ uri: attachment.localUri }}
+          resizeMode="cover"
+          style={styles.promptImageAttachmentThumbnail}
+        />
+        {uploading || errored ? (
+          <View style={styles.promptAttachmentStateOverlay}>
+            {uploading ? (
+              <ActivityIndicator color={palette.accent} />
+            ) : (
+              <AdaptiveIcon fallback={X} iosSymbol="xmark" color={palette.danger} size={15} />
+            )}
+          </View>
+        ) : null}
+        <PromptAttachmentRemoveButton attachment={attachment} onRemove={onRemove} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={[
+      styles.promptFileAttachment,
+      errored ? styles.promptAttachmentError : null
+    ]}>
+      <View style={styles.promptFileAttachmentIcon}>
+        {uploading ? (
+          <ActivityIndicator color={palette.accent} />
+        ) : (
+          <AdaptiveIcon fallback={FileText} iosSymbol="doc" color={errored ? palette.danger : palette.muted} size={16} />
+        )}
+      </View>
+      <View style={styles.promptFileAttachmentText}>
+        <Text numberOfLines={1} style={styles.promptFileAttachmentName}>
+          {attachment.localName}
+        </Text>
+        <Text numberOfLines={1} style={[styles.promptFileAttachmentMeta, errored ? styles.promptFileAttachmentMetaError : null]}>
+          {promptAttachmentMetaLabel(attachment)}
+        </Text>
+      </View>
+      <PromptAttachmentRemoveButton attachment={attachment} onRemove={onRemove} />
+    </View>
+  );
+}
+
+function PromptAttachmentRemoveButton({
+  attachment,
+  onRemove
+}: {
+  attachment: PromptAttachment;
+  onRemove(attachmentId: string): void;
+}): React.ReactElement {
+  return (
+    <TouchableOpacity
+      accessibilityLabel={`Remove ${attachment.localName}`}
+      onPress={() => onRemove(attachment.id)}
+      style={styles.promptAttachmentRemoveButton}
+    >
+      <AdaptiveIcon fallback={X} iosSymbol="xmark" color={palette.text} size={11} />
+    </TouchableOpacity>
+  );
+}
+
 function keyboardLiftTranslateY(keyboardOffset: CommandProgress): 0 | ReturnType<typeof Animated.multiply> {
   return Platform.OS === "android" ? 0 : Animated.multiply(keyboardOffset, -1);
 }
@@ -1552,6 +1891,111 @@ function keyboardLiftTranslateY(keyboardOffset: CommandProgress): 0 | ReturnType
 function keyboardEventHeight(event: KeyboardEvent): number {
   const height = Math.max(0, Math.ceil(event.endCoordinates?.height ?? 0));
   return height < 24 ? 0 : height;
+}
+
+let promptAttachmentSequence = 1;
+
+function nextPromptAttachmentId(): string {
+  return `${Date.now().toString(36)}-${promptAttachmentSequence++}`;
+}
+
+async function readPromptUploadBase64(file: ExpoFile): Promise<string> {
+  if (file.size > PROMPT_UPLOAD_MAX_BYTES) {
+    throw new Error("Upload must be 25 MB or smaller");
+  }
+
+  return arrayBufferToBase64(await file.arrayBuffer());
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const chunks: string[] = [];
+  let chunk = "";
+  let index = 0;
+
+  for (; index + 2 < bytes.length; index += 3) {
+    const value = (bytes[index] << 16) | (bytes[index + 1] << 8) | bytes[index + 2];
+    chunk +=
+      alphabet[(value >> 18) & 63] +
+      alphabet[(value >> 12) & 63] +
+      alphabet[(value >> 6) & 63] +
+      alphabet[value & 63];
+
+    if (chunk.length >= 8192) {
+      chunks.push(chunk);
+      chunk = "";
+    }
+  }
+
+  if (index < bytes.length) {
+    const first = bytes[index];
+    const second = index + 1 < bytes.length ? bytes[index + 1] : 0;
+    const value = (first << 16) | (second << 8);
+    chunk +=
+      alphabet[(value >> 18) & 63] +
+      alphabet[(value >> 12) & 63] +
+      (index + 1 < bytes.length ? alphabet[(value >> 6) & 63] : "=") +
+      "=";
+  }
+
+  if (chunk) {
+    chunks.push(chunk);
+  }
+
+  return chunks.join("");
+}
+
+function isImageAttachment(attachment: PromptAttachment): boolean {
+  if (attachment.mimeType?.toLowerCase().startsWith("image/")) {
+    return true;
+  }
+
+  return /\.(avif|gif|heic|heif|jpe?g|png|webp)$/i.test(attachment.localName);
+}
+
+function promptAttachmentMetaLabel(attachment: PromptAttachment): string {
+  if (attachment.status === "uploading") {
+    return "Uploading";
+  }
+  if (attachment.status === "error") {
+    return attachment.error || "Upload failed";
+  }
+  if (attachment.remote) {
+    return formatBytes(attachment.remote.size);
+  }
+  return formatBytes(attachment.size);
+}
+
+function formatPromptComposerInput(prompt: string, attachments: PromptAttachment[]): string {
+  const normalizedPrompt = prompt.replace(/\s+/g, " ").trim();
+  const files = attachments
+    .filter((attachment): attachment is PromptAttachment & { remote: UploadedFile } =>
+      attachment.status === "ready" && Boolean(attachment.remote)
+    )
+    .map((attachment) => `${attachment.remote.name}: ${attachment.remote.path}`);
+
+  return [
+    normalizedPrompt,
+    files.length > 0 ? `Files: ${files.join("; ")}` : ""
+  ].filter(Boolean).join(" ").trim();
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const digits = value >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
 }
 
 function CommandKeyboardButton({
@@ -2666,6 +3110,154 @@ const styles = StyleSheet.create({
   },
   renameSaveTextDisabled: {
     color: palette.faint
+  },
+  promptComposerSheet: {
+    gap: 8,
+    paddingBottom: 0
+  },
+  promptComposerOverlay: {
+    backgroundColor: "transparent",
+    left: 10,
+    position: "absolute",
+    right: 10,
+    zIndex: 36
+  },
+  promptComposerInput: {
+    backgroundColor: "transparent",
+    color: palette.text,
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 20,
+    maxHeight: PROMPT_INPUT_MAX_HEIGHT,
+    minHeight: PROMPT_INPUT_MIN_HEIGHT,
+    paddingHorizontal: 4,
+    paddingTop: 8,
+    paddingBottom: 8
+  },
+  promptComposerBar: {
+    alignItems: "flex-end",
+    backgroundColor: palette.panelStrong,
+    borderColor: "rgba(216, 229, 222, 0.12)",
+    borderRadius: 22,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 4,
+    minHeight: 48,
+    paddingHorizontal: 7,
+    paddingVertical: 6
+  },
+  promptComposerIconButton: {
+    alignItems: "center",
+    flexShrink: 0,
+    height: 36,
+    justifyContent: "center",
+    width: 38
+  },
+  promptSendIconButton: {
+    alignItems: "center",
+    backgroundColor: palette.accent,
+    borderRadius: 18,
+    flexShrink: 0,
+    height: 36,
+    justifyContent: "center",
+    width: 36
+  },
+  promptSendIconButtonDisabled: {
+    backgroundColor: "rgba(216, 229, 222, 0.08)"
+  },
+  promptAttachmentPreviewScroll: {
+    maxHeight: 62
+  },
+  promptAttachmentPreviews: {
+    gap: 7,
+    paddingHorizontal: 2
+  },
+  promptImageAttachment: {
+    backgroundColor: "rgba(216, 229, 222, 0.08)",
+    borderColor: "rgba(216, 229, 222, 0.12)",
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 58,
+    overflow: "hidden",
+    position: "relative",
+    width: 58
+  },
+  promptImageAttachmentThumbnail: {
+    height: "100%",
+    width: "100%"
+  },
+  promptFileAttachment: {
+    alignItems: "center",
+    backgroundColor: "rgba(216, 229, 222, 0.08)",
+    borderColor: "rgba(216, 229, 222, 0.12)",
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 8,
+    height: 58,
+    maxWidth: 208,
+    minWidth: 154,
+    paddingLeft: 10,
+    paddingRight: 30
+  },
+  promptAttachmentError: {
+    borderColor: "rgba(255, 125, 125, 0.36)"
+  },
+  promptFileAttachmentIcon: {
+    alignItems: "center",
+    flexShrink: 0,
+    height: 28,
+    justifyContent: "center",
+    width: 22
+  },
+  promptFileAttachmentText: {
+    flex: 1,
+    minWidth: 0
+  },
+  promptFileAttachmentName: {
+    color: palette.text,
+    fontSize: 12,
+    fontWeight: "800",
+    lineHeight: 16
+  },
+  promptFileAttachmentMeta: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 15
+  },
+  promptFileAttachmentMetaError: {
+    color: palette.danger
+  },
+  promptAttachmentStateOverlay: {
+    alignItems: "center",
+    backgroundColor: "rgba(13, 17, 16, 0.66)",
+    bottom: 0,
+    justifyContent: "center",
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0
+  },
+  promptAttachmentRemoveButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(13, 17, 16, 0.78)",
+    borderRadius: 10,
+    flexShrink: 0,
+    height: 20,
+    justifyContent: "center",
+    position: "absolute",
+    right: 3,
+    top: 3,
+    width: 20
+  },
+  promptComposerError: {
+    color: palette.danger,
+    fontSize: 12,
+    lineHeight: 16,
+    paddingHorizontal: 4
+  },
+  promptActionDisabled: {
+    opacity: 0.54
   },
   commandBar: {
     alignItems: "center",

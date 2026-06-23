@@ -6,7 +6,9 @@ import type {
   RenameRequest,
   ResizePaneRequest,
   SplitPaneRequest,
-  TmuxTree
+  TmuxTree,
+  UploadedFile,
+  UploadFileRequest
 } from "@telemux/protocol";
 
 export interface TelemuxClientOptions {
@@ -84,6 +86,10 @@ export class TelemuxClient {
 
   updatePreferences(body: Partial<Preferences>): Promise<Preferences> {
     return this.request("/api/preferences", { method: "PATCH", body });
+  }
+
+  uploadFile(body: UploadFileRequest): Promise<UploadedFile> {
+    return this.request("/api/uploads", { method: "POST", body });
   }
 
   terminalWebSocketUrl(paneId: string): string {

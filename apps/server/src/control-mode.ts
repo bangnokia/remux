@@ -94,6 +94,8 @@ export class TerminalBridge {
 
       if (message.type === "input") {
         await this.tmux.sendTerminalInput(this.paneId, message.data);
+      } else if (message.type === "key") {
+        await this.tmux.sendTerminalKey(this.paneId, message.key);
       } else if (message.type === "resize") {
         const cols = clampInteger(message.cols, 20, 500);
         const rows = clampInteger(message.rows, 5, 200);

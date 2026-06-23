@@ -1,6 +1,6 @@
 import { CanvasRenderer, FitAddon, Terminal, init } from "ghostty-web";
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-import type { TerminalServerMessage } from "@telemux/protocol";
+import type { TerminalKey, TerminalServerMessage } from "@telemux/protocol";
 import {
   TERMINAL_FONT_FACE,
   TERMINAL_FONT_FAMILY,
@@ -43,6 +43,9 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
     },
     sendInput(data: string) {
       sendSocket(socketRef.current, { type: "input", data });
+    },
+    sendKey(key: TerminalKey) {
+      sendSocket(socketRef.current, { type: "key", key });
     },
     focusKeyboard() {
       terminalRef.current?.focus();

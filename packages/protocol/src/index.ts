@@ -63,6 +63,19 @@ export interface Preferences {
   labels: Record<string, string>;
 }
 
+export interface UploadFileRequest {
+  base64: string;
+  mimeType?: string | null;
+  name: string;
+}
+
+export interface UploadedFile {
+  mimeType: string | null;
+  name: string;
+  path: string;
+  size: number;
+}
+
 export interface CreateSessionRequest {
   name?: string;
 }
@@ -94,8 +107,11 @@ export interface ApiErrorBody {
   };
 }
 
+export type TerminalKey = "Enter";
+
 export type TerminalClientMessage =
   | { type: "input"; data: string }
+  | { type: "key"; key: TerminalKey }
   | { type: "resize"; cols: number; rows: number }
   | { type: "focus"; paneId: string }
   | { type: "ping"; id: string };

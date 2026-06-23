@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type {
+  TerminalKey,
   TmuxAgentKind,
   TmuxPane,
   TmuxPaneStatus,
@@ -183,6 +184,10 @@ export class TmuxService {
     for (const args of terminalInputToSendKeysArgs(paneId, data)) {
       await this.run(args);
     }
+  }
+
+  async sendTerminalKey(paneId: string, key: TerminalKey): Promise<void> {
+    await this.run(["send-keys", "-t", paneId, assertTerminalKey(key)]);
   }
 
   async capturePane(paneId: string, historyLines = 0): Promise<string> {
@@ -427,6 +432,14 @@ export function terminalInputToSendKeysArgs(paneId: string, data: string): strin
 
   flushLiteral();
   return commands;
+}
+
+function assertTerminalKey(value: unknown): TerminalKey {
+  if (value === "Enter") {
+    return value;
+  }
+
+  throw badRequest("terminal key is not supported", "unsupported_terminal_key");
 }
 
 export function classifyPaneStatus(
